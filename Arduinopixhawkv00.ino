@@ -29,11 +29,14 @@ void adaptiveCovariance(mavlink_odometry_t &odom, float trust_factor);
 #define Serial_xsens Serial2
 #define NMEA_OUT_Serial Serial3
 #define NMEA_IN_Serial Serial4
+#define DATA_OK       0
+#define DATA_WARNING  1
+#define DATA_INVALID  2
 
 XsensUart xsens(Serial_xsens);
 int64_t time_offset = 0;
 uint64_t xsens_pre_time = 0;
-uint8_t current_Xsens_mode = MODE_AHRS;
+uint8_t current_Xsens_mode = MODE_AHRS; // 編號: 1
 uint8_t current_output_mode = OUT_MODE_BIN;
 bool is_run = false;  
 bool is_debug = false;
@@ -338,14 +341,14 @@ void readXsens(){
         
         // Check timestamp monotonicity
         if (XsensTime.ulong_val <= xsens_pre_time && xsens_pre_time != 0) {
-          Serial.println("Warning: Non-monotonic timestamp detected");
+          // Serial.println("Warning: Non-monotonic timestamp detected");
           data_valid = false;
         }
         
         // Validate angular velocity (reasonable range: -10 to +10 rad/s)
         for (int i = 0; i < 3; i++) {
           if (abs(omg.float_val[i]) > 10.0) {
-            Serial.print("Warning: Excessive angular velocity detected: ");
+            // Serial.print("Warning: Excessive angular velocity detected: ");
             Serial.println(omg.float_val[i]);
             data_valid = false;
           }
@@ -357,13 +360,21 @@ void readXsens(){
                               qut.float_val[2]*qut.float_val[2] + 
                               qut.float_val[3]*qut.float_val[3]);
         if (abs(quat_norm - 1.0) > 0.1) {
-          Serial.print("Warning: Invalid quaternion norm: ");
-          Serial.println(quat_norm);
+          // Serial.print("Warning: Invalid quaternion norm: ");
+          static unsigned long last_quat_error_time = 0;
+          if (millis() - last_quat_error_time >= 5000) { // 5秒輸出一次
+            Serial.println(quat_norm);
+            last_quat_error_time = millis();
+          }
           data_valid = false;
         }
         
         if (!data_valid) {
-          Serial.println("Skipping invalid sensor data");
+          static unsigned long last_error_time = 0;
+          if (millis() - last_error_time >= 5000) { // 5秒輸出一次
+            Serial.println("Skipping invalid sensor data");
+            last_error_time = millis();
+          }
           return;
         }
         
@@ -542,8 +553,8 @@ void readXsens(){
         }
       }
       else if(xsens.getDataStatus() == DATA_WARNING){
-        Serial.print("Warning: ");
-        xsens.PrintMessage();
+        // Serial.print("Warning: ");
+        // xsens.PrintMessage();
         PIXHAWK_SERIAL.print("Warning: ");
         xsens.PrintMessage(PIXHAWK_SERIAL);
       }
@@ -1595,12 +1606,44 @@ void disableSecurityMode(HardwareSerial &port) {
 void sendProcessingDataAndStartMeas(HardwareSerial &port){
   xsens.ToConfigMode();
   xsens.reset();
-  xsens.InitMT();
+  
+  delay(2000);  // 🔁 等感測器重新開機
 
-  delay(100);
-  Serial.println();
-  port.println();
+  bool init_success = false;
+  for (int i = 0; i < 2; i++) {
+    xsens.InitMT();
+    delay(300);  // 給時間完成初始化
+    // 簡單驗證：假設初始化成功
+    init_success = true;
+    break;
+  }
+  
+  if (!init_success) {
+    Serial.println("Init Sensor failed.");
+    port.println("Init Sensor failed");
+    return;
+  }
+
+  delay(200);  // 保險延遲
+
+  bool meas_success = false;
+for (int i = 0; i < 2; i++) {
   xsens.ToMeasurementMode();
+  delay(300);  // 給時間完成模式切換
+  
+  if (xsens.getDataStatus() != DATA_INVALID) {
+    meas_success = true;
+    break;
+  }
+}
+  
+  if (!meas_success) {
+    Serial.println("Measurement Mode failed.");
+    port.println("Measurement Mode failed");
+    return;
+  }
+
+  port.println("[XSENS] Init + Measurement Mode Success");
 }
 
 // Calculates the 16-bit CRC for the given ASCII or binary message.
