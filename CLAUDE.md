@@ -154,7 +154,15 @@ Before starting ANY task, verify:
 
 # Monitor serial output
 # make monitor
+
+# Check current git branch
+git -C /mnt/c/Users/user/MINSPixhawk/Arduinopixhawkv00 branch
 ```
+
+## 📋 WORK SESSION REPORTING
+- **After each work session**, report current branch status
+- **Working directory**: `/mnt/c/Users/user/MINSPixhawk/Arduinopixhawkv00`
+- **Current branch**: `feature-XBUS讀取`
 
 ## 🚨 TECHNICAL DEBT PREVENTION
 
