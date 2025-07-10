@@ -83,14 +83,20 @@ const unsigned long SYNC_INTERVAL = 1000;   // 每 1 秒重新同步一次，改
 const uint32_t TARGET_MAVLINK_HZ = 50;       // 目標 MAVLink 發送頻率 (Hz)
 const uint32_t MAVLINK_SEND_INTERVAL = 1000000 / TARGET_MAVLINK_HZ / 10;  // Xsens時間戳間隔 (20000 for 50Hz)
 
-// NMEA 發送頻率控制 - 針對 MTi-680 優化
-unsigned long last_nmea_send = 0;            // 上次發送NMEA的時間
-const unsigned long NMEA_SEND_INTERVAL = 1000; // 1Hz (每秒1次)
+// NMEA 發送頻率控制 - 針對 MTi-680 優化 (分類型控制)
+unsigned long last_gga_send = 0;            // 上次發送GGA的時間
+unsigned long last_rmc_send = 0;            // 上次發送RMC的時間
+unsigned long last_gst_send = 0;            // 上次發送GST的時間
+unsigned long last_gsa_send = 0;            // 上次發送GSA的時間
+unsigned long last_vtg_send = 0;            // 上次發送VTG的時間
+unsigned long last_zda_send = 0;            // 上次發送ZDA的時間
+const unsigned long NMEA_SEND_INTERVAL = 1000; // 1Hz (每種類型每秒1次)
 unsigned long nmea_received_count = 0;       // 接收到的NMEA句子總數
 unsigned long nmea_sent_count = 0;           // 發送到MTi-680的句子數
 unsigned long nmea_invalid_count = 0;        // 無效NMEA句子數
 unsigned long nmea_discarded_count = 0;      // 被丟棄的不完整句子數
 unsigned long gga_sent = 0, rmc_sent = 0, gst_sent = 0; // 各類型句子發送統計
+unsigned long gsa_sent = 0, vtg_sent = 0, zda_sent = 0; // 新增句子類型發送統計
 
 // 平滑 time_offset：使用滑動平均法
 const int OFFSET_BUF_SIZE = 5;
@@ -179,7 +185,17 @@ void loop() {
                    ", Success: " + String(filter_ratio, 1) + "%");
     Serial.println("[TYPES] GGA: " + String(gga_sent) + 
                    ", RMC: " + String(rmc_sent) + 
-                   ", GST: " + String(gst_sent));
+                   ", GST: " + String(gst_sent) +
+                   ", GSA: " + String(gsa_sent) +
+                   ", VTG: " + String(vtg_sent) +
+                   ", ZDA: " + String(zda_sent));
+    unsigned long now = millis();
+    Serial.println("[TIMING] GGA: " + String((now - last_gga_send)/1000.0, 1) + "s ago" +
+                   ", RMC: " + String((now - last_rmc_send)/1000.0, 1) + "s ago" +
+                   ", GST: " + String((now - last_gst_send)/1000.0, 1) + "s ago");
+    Serial.println("[TIMING2] GSA: " + String((now - last_gsa_send)/1000.0, 1) + "s ago" +
+                   ", VTG: " + String((now - last_vtg_send)/1000.0, 1) + "s ago" +
+                   ", ZDA: " + String((now - last_zda_send)/1000.0, 1) + "s ago");
     Serial.println("[BUFFER] Size: " + String(nmea_input_buffer.length()) + 
                    ", Preview: " + nmea_input_buffer.substring(0, min(30, (int)nmea_input_buffer.length())));
     last_heartbeat = millis();
@@ -1337,16 +1353,36 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
   // MTi-680 只需要特定的NMEA句子類型
   bool is_needed_sentence = nmea_sentence.startsWith("$GNGGA") || 
                            nmea_sentence.startsWith("$GNRMC") || 
-                           nmea_sentence.startsWith("$GNGST");
+                           nmea_sentence.startsWith("$GNGST") ||
+                           nmea_sentence.startsWith("$GNGSA") ||
+                           nmea_sentence.startsWith("$GNVTG") ||
+                           nmea_sentence.startsWith("$GNZDA");
   
   // 如果不是需要的句子類型，直接丟棄
   if (!is_needed_sentence) {
     return;
   }
   
-  // 頻率控制：限制為1Hz以避免MTi-680數據過載
-  if (millis() - last_nmea_send < NMEA_SEND_INTERVAL) {
-    return; // 跳過，還沒到發送時間
+  // 分類型頻率控制：每種句子類型獨立控制1Hz頻率
+  bool should_send = false;
+  unsigned long current_time = millis();
+  
+  if (nmea_sentence.startsWith("$GNGGA")) {
+    should_send = (current_time - last_gga_send >= NMEA_SEND_INTERVAL);
+  } else if (nmea_sentence.startsWith("$GNRMC")) {
+    should_send = (current_time - last_rmc_send >= NMEA_SEND_INTERVAL);
+  } else if (nmea_sentence.startsWith("$GNGST")) {
+    should_send = (current_time - last_gst_send >= NMEA_SEND_INTERVAL);
+  } else if (nmea_sentence.startsWith("$GNGSA")) {
+    should_send = (current_time - last_gsa_send >= NMEA_SEND_INTERVAL);
+  } else if (nmea_sentence.startsWith("$GNVTG")) {
+    should_send = (current_time - last_vtg_send >= NMEA_SEND_INTERVAL);
+  } else if (nmea_sentence.startsWith("$GNZDA")) {
+    should_send = (current_time - last_zda_send >= NMEA_SEND_INTERVAL);
+  }
+  
+  if (!should_send) {
+    return; // 該類型句子還沒到發送時間
   }
   
   // Validate NMEA checksum
@@ -1368,8 +1404,29 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
   // For GNSS test mode, just forward the data
   if (is_gnss_test) {
     output_port.println(nmea_sentence);
-    last_nmea_send = millis(); // 更新發送時間
     nmea_sent_count++;
+    
+    // 更新對應類型的發送時間戳
+    if (nmea_sentence.startsWith("$GNGGA")) {
+      last_gga_send = current_time;
+      gga_sent++;
+    } else if (nmea_sentence.startsWith("$GNRMC")) {
+      last_rmc_send = current_time;
+      rmc_sent++;
+    } else if (nmea_sentence.startsWith("$GNGST")) {
+      last_gst_send = current_time;
+      gst_sent++;
+    } else if (nmea_sentence.startsWith("$GNGSA")) {
+      last_gsa_send = current_time;
+      gsa_sent++;
+    } else if (nmea_sentence.startsWith("$GNVTG")) {
+      last_vtg_send = current_time;
+      vtg_sent++;
+    } else if (nmea_sentence.startsWith("$GNZDA")) {
+      last_zda_send = current_time;
+      zda_sent++;
+    }
+    
     Serial.println("→ MTi-680: " + nmea_sentence);
     return;
   }
@@ -1377,13 +1434,28 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
   // Parse and modify timestamp if needed
   String modified_sentence = modifyNMEATimestamp(nmea_sentence);
   output_port.println(modified_sentence);
-  last_nmea_send = millis(); // 更新發送時間
   nmea_sent_count++;
   
-  // 統計各類型句子
-  if (modified_sentence.startsWith("$GNGGA")) gga_sent++;
-  else if (modified_sentence.startsWith("$GNRMC")) rmc_sent++;
-  else if (modified_sentence.startsWith("$GNGST")) gst_sent++;
+  // 更新對應類型的發送時間戳
+  if (modified_sentence.startsWith("$GNGGA")) {
+    last_gga_send = current_time;
+    gga_sent++;
+  } else if (modified_sentence.startsWith("$GNRMC")) {
+    last_rmc_send = current_time;
+    rmc_sent++;
+  } else if (modified_sentence.startsWith("$GNGST")) {
+    last_gst_send = current_time;
+    gst_sent++;
+  } else if (modified_sentence.startsWith("$GNGSA")) {
+    last_gsa_send = current_time;
+    gsa_sent++;
+  } else if (modified_sentence.startsWith("$GNVTG")) {
+    last_vtg_send = current_time;
+    vtg_sent++;
+  } else if (modified_sentence.startsWith("$GNZDA")) {
+    last_zda_send = current_time;
+    zda_sent++;
+  }
   
   // 總是顯示發送給MTi-680的數據
   Serial.println("→ MTi-680: " + modified_sentence);
