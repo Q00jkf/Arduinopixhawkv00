@@ -82,6 +82,12 @@ const unsigned long SYNC_INTERVAL = 1000;   // 每 1 秒重新同步一次，改
 const uint32_t TARGET_MAVLINK_HZ = 50;       // 目標 MAVLink 發送頻率 (Hz)
 const uint32_t MAVLINK_SEND_INTERVAL = 1000000 / TARGET_MAVLINK_HZ / 10;  // Xsens時間戳間隔 (20000 for 50Hz)
 
+// NMEA 發送頻率控制 - 針對 MTi-680 優化
+unsigned long last_nmea_send = 0;            // 上次發送NMEA的時間
+const unsigned long NMEA_SEND_INTERVAL = 1000; // 1Hz (每秒1次)
+unsigned long nmea_received_count = 0;       // 接收到的NMEA句子總數
+unsigned long nmea_sent_count = 0;           // 發送到MTi-680的句子數
+
 // 平滑 time_offset：使用滑動平均法
 const int OFFSET_BUF_SIZE = 5;
 int64_t time_offset_buffer[OFFSET_BUF_SIZE] = {0};
@@ -161,6 +167,10 @@ void loop() {
   static unsigned long last_heartbeat = 0;
   if (millis() - last_heartbeat > 5000) {  // 每5秒一次心跳
     Serial.println("[HEARTBEAT] System running, time: " + String(millis()/1000) + "s");
+    float filter_ratio = (nmea_received_count > 0) ? (float(nmea_sent_count)/float(nmea_received_count)*100) : 0;
+    Serial.println("[NMEA] Received: " + String(nmea_received_count) + 
+                   ", Sent to MTi: " + String(nmea_sent_count) + 
+                   ", Filter ratio: " + String(filter_ratio, 1) + "%");
     last_heartbeat = millis();
   }
   
@@ -1294,6 +1304,23 @@ void printNMEAWithModifiedTimestampLocal(HardwareSerial &input_port, HardwareSer
 }
 
 void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool is_gnss_test) {
+  nmea_received_count++; // 統計接收到的句子數
+  
+  // MTi-680 只需要特定的NMEA句子類型
+  bool is_needed_sentence = nmea_sentence.startsWith("$GNGGA") || 
+                           nmea_sentence.startsWith("$GNRMC") || 
+                           nmea_sentence.startsWith("$GNGST");
+  
+  // 如果不是需要的句子類型，直接丟棄
+  if (!is_needed_sentence) {
+    return;
+  }
+  
+  // 頻率控制：限制為1Hz以避免MTi-680數據過載
+  if (millis() - last_nmea_send < NMEA_SEND_INTERVAL) {
+    return; // 跳過，還沒到發送時間
+  }
+  
   // Validate NMEA checksum
   if (!validateNMEAChecksum(nmea_sentence)) {
     if (is_debug) {
@@ -1312,15 +1339,19 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
   // For GNSS test mode, just forward the data
   if (is_gnss_test) {
     output_port.println(nmea_sentence);
+    last_nmea_send = millis(); // 更新發送時間
+    nmea_sent_count++;
     return;
   }
   
   // Parse and modify timestamp if needed
   String modified_sentence = modifyNMEATimestamp(nmea_sentence);
   output_port.println(modified_sentence);
+  last_nmea_send = millis(); // 更新發送時間
+  nmea_sent_count++;
   
   if (is_debug) {
-    Serial.println("NMEA: " + modified_sentence);
+    Serial.println("SENT TO MTi: " + modified_sentence);
   }
 }
 
