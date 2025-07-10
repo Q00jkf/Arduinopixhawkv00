@@ -89,6 +89,8 @@ const unsigned long NMEA_SEND_INTERVAL = 1000; // 1Hz (每秒1次)
 unsigned long nmea_received_count = 0;       // 接收到的NMEA句子總數
 unsigned long nmea_sent_count = 0;           // 發送到MTi-680的句子數
 unsigned long nmea_invalid_count = 0;        // 無效NMEA句子數
+unsigned long nmea_discarded_count = 0;      // 被丟棄的不完整句子數
+unsigned long gga_sent = 0, rmc_sent = 0, gst_sent = 0; // 各類型句子發送統計
 
 // 平滑 time_offset：使用滑動平均法
 const int OFFSET_BUF_SIZE = 5;
@@ -173,7 +175,11 @@ void loop() {
     Serial.println("[NMEA] Received: " + String(nmea_received_count) + 
                    ", Sent: " + String(nmea_sent_count) + 
                    ", Invalid: " + String(nmea_invalid_count) +
-                   ", Success ratio: " + String(filter_ratio, 1) + "%");
+                   ", Discarded: " + String(nmea_discarded_count) +
+                   ", Success: " + String(filter_ratio, 1) + "%");
+    Serial.println("[TYPES] GGA: " + String(gga_sent) + 
+                   ", RMC: " + String(rmc_sent) + 
+                   ", GST: " + String(gst_sent));
     Serial.println("[BUFFER] Size: " + String(nmea_input_buffer.length()) + 
                    ", Preview: " + nmea_input_buffer.substring(0, min(30, (int)nmea_input_buffer.length())));
     last_heartbeat = millis();
@@ -1291,12 +1297,14 @@ void printNMEAWithModifiedTimestampLocal(HardwareSerial &input_port, HardwareSer
 
     // ① 若收到新的 '$' 字元，代表一句新的開始
     if (c == '$') {
-      if (nmea_input_buffer.length() > 0) {
+      // 只在緩衝區有實質內容且不是完整句子時才警告
+      if (nmea_input_buffer.length() > 10 && nmea_input_buffer.indexOf('*') == -1) {
+        nmea_discarded_count++;
         if (is_debug) {
-          Serial.println("[WARN] Unexpected '$' detected in middle of sentence.");
+          Serial.println("[WARN] Incomplete NMEA sentence discarded: " + nmea_input_buffer.substring(0, 20) + "...");
         }
       }
-      nmea_input_buffer = "$";  // 仍然要清空重新開始
+      nmea_input_buffer = "$";  // 重設累積字串
     }
     // ② 結尾判斷，若遇到換行
     else if (c == '\r' || c == '\n') {
@@ -1308,7 +1316,17 @@ void printNMEAWithModifiedTimestampLocal(HardwareSerial &input_port, HardwareSer
     }
     // ③ 中間其他字元 → 繼續累加
     else {
-      nmea_input_buffer += c;
+      // 防止緩衝區過大
+      if (nmea_input_buffer.length() < 200) {
+        nmea_input_buffer += c;
+      } else {
+        // 緩衝區過大，重設
+        nmea_discarded_count++;
+        nmea_input_buffer = "";
+        if (is_debug) {
+          Serial.println("[WARN] NMEA buffer overflow, reset.");
+        }
+      }
     }
   }
 }
@@ -1352,6 +1370,7 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
     output_port.println(nmea_sentence);
     last_nmea_send = millis(); // 更新發送時間
     nmea_sent_count++;
+    Serial.println("→ MTi-680: " + nmea_sentence);
     return;
   }
   
@@ -1361,9 +1380,13 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
   last_nmea_send = millis(); // 更新發送時間
   nmea_sent_count++;
   
-  if (is_debug) {
-    Serial.println("SENT TO MTi: " + modified_sentence);
-  }
+  // 統計各類型句子
+  if (modified_sentence.startsWith("$GNGGA")) gga_sent++;
+  else if (modified_sentence.startsWith("$GNRMC")) rmc_sent++;
+  else if (modified_sentence.startsWith("$GNGST")) gst_sent++;
+  
+  // 總是顯示發送給MTi-680的數據
+  Serial.println("→ MTi-680: " + modified_sentence);
 }
 
 bool validateNMEAChecksum(String nmea_sentence) {
