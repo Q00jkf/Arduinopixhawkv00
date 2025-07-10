@@ -46,6 +46,7 @@ bool enable_input = true;
 bool time_sync_initialized = false;  // 新增：時間同步初始化標記
 bool gps_connected = false;          // GPS 連接狀態
 unsigned long last_gps_data_time = 0; // 最後收到 GPS 數據的時間
+String nmea_input_buffer = "";       // NMEA 串列累積緩衝區
 
 // 動態權重系統變數
 struct {
@@ -87,6 +88,7 @@ unsigned long last_nmea_send = 0;            // 上次發送NMEA的時間
 const unsigned long NMEA_SEND_INTERVAL = 1000; // 1Hz (每秒1次)
 unsigned long nmea_received_count = 0;       // 接收到的NMEA句子總數
 unsigned long nmea_sent_count = 0;           // 發送到MTi-680的句子數
+unsigned long nmea_invalid_count = 0;        // 無效NMEA句子數
 
 // 平滑 time_offset：使用滑動平均法
 const int OFFSET_BUF_SIZE = 5;
@@ -169,8 +171,11 @@ void loop() {
     Serial.println("[HEARTBEAT] System running, time: " + String(millis()/1000) + "s");
     float filter_ratio = (nmea_received_count > 0) ? (float(nmea_sent_count)/float(nmea_received_count)*100) : 0;
     Serial.println("[NMEA] Received: " + String(nmea_received_count) + 
-                   ", Sent to MTi: " + String(nmea_sent_count) + 
-                   ", Filter ratio: " + String(filter_ratio, 1) + "%");
+                   ", Sent: " + String(nmea_sent_count) + 
+                   ", Invalid: " + String(nmea_invalid_count) +
+                   ", Success ratio: " + String(filter_ratio, 1) + "%");
+    Serial.println("[BUFFER] Size: " + String(nmea_input_buffer.length()) + 
+                   ", Preview: " + nmea_input_buffer.substring(0, min(30, (int)nmea_input_buffer.length())));
     last_heartbeat = millis();
   }
   
@@ -1281,25 +1286,30 @@ void send2Serial(HardwareSerial &port, const String str){
 }
 
 void printNMEAWithModifiedTimestampLocal(HardwareSerial &input_port, HardwareSerial &output_port, bool is_gnss_test) {
-  String nmea_line = "";
-  unsigned long start_time = millis();
-  
-  // Read NMEA sentence with timeout
-  while (input_port.available() && (millis() - start_time < 100)) {
+  while (input_port.available()) {
     char c = input_port.read();
-    if (c == '\n' || c == '\r') {
-      if (nmea_line.length() > 6) {  // Valid NMEA minimum length
-        processNMEASentence(nmea_line, output_port, is_gnss_test);
+
+    // ① 若收到新的 '$' 字元，代表一句新的開始
+    if (c == '$') {
+      if (nmea_input_buffer.length() > 0) {
+        if (is_debug) {
+          Serial.println("[WARN] Unexpected '$' detected in middle of sentence.");
+        }
       }
-      nmea_line = "";
-    } else {
-      nmea_line += c;
+      nmea_input_buffer = "$";  // 仍然要清空重新開始
     }
-  }
-  
-  // Handle any remaining data
-  if (nmea_line.length() > 6) {
-    processNMEASentence(nmea_line, output_port, is_gnss_test);
+    // ② 結尾判斷，若遇到換行
+    else if (c == '\r' || c == '\n') {
+      if (nmea_input_buffer.length() > 6 && nmea_input_buffer.indexOf('*') != -1) {
+        // 送出完整一句處理
+        processNMEASentence(nmea_input_buffer, output_port, is_gnss_test);
+      }
+      nmea_input_buffer = ""; // 處理完清空
+    }
+    // ③ 中間其他字元 → 繼續累加
+    else {
+      nmea_input_buffer += c;
+    }
   }
 }
 
@@ -1323,6 +1333,7 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
   
   // Validate NMEA checksum
   if (!validateNMEAChecksum(nmea_sentence)) {
+    nmea_invalid_count++;
     if (is_debug) {
       Serial.println("Invalid NMEA checksum: " + nmea_sentence);
     }
