@@ -46,6 +46,7 @@ bool enable_input = true;
 bool time_sync_initialized = false;  // 新增：時間同步初始化標記
 bool gps_connected = false;          // GPS 連接狀態
 unsigned long last_gps_data_time = 0; // 最後收到 GPS 數據的時間
+String nmea_input_buffer = "";       // NMEA 串列累積緩衝區
 
 // 動態權重系統變數
 struct {
@@ -81,6 +82,21 @@ const unsigned long SYNC_INTERVAL = 1000;   // 每 1 秒重新同步一次，改
 // MAVLink 發送頻率控制 - 統一數據流暢性
 const uint32_t TARGET_MAVLINK_HZ = 50;       // 目標 MAVLink 發送頻率 (Hz)
 const uint32_t MAVLINK_SEND_INTERVAL = 1000000 / TARGET_MAVLINK_HZ / 10;  // Xsens時間戳間隔 (20000 for 50Hz)
+
+// NMEA 發送頻率控制 - 針對 MTi-680 優化 (分類型控制)
+unsigned long last_gga_send = 0;            // 上次發送GGA的時間
+unsigned long last_rmc_send = 0;            // 上次發送RMC的時間
+unsigned long last_gst_send = 0;            // 上次發送GST的時間
+unsigned long last_gsa_send = 0;            // 上次發送GSA的時間
+unsigned long last_vtg_send = 0;            // 上次發送VTG的時間
+unsigned long last_zda_send = 0;            // 上次發送ZDA的時間
+const unsigned long NMEA_SEND_INTERVAL = 1000; // 1Hz (每種類型每秒1次)
+unsigned long nmea_received_count = 0;       // 接收到的NMEA句子總數
+unsigned long nmea_sent_count = 0;           // 發送到MTi-680的句子數
+unsigned long nmea_invalid_count = 0;        // 無效NMEA句子數
+unsigned long nmea_discarded_count = 0;      // 被丟棄的不完整句子數
+unsigned long gga_sent = 0, rmc_sent = 0, gst_sent = 0; // 各類型句子發送統計
+unsigned long gsa_sent = 0, vtg_sent = 0, zda_sent = 0; // 新增句子類型發送統計
 
 // 平滑 time_offset：使用滑動平均法
 const int OFFSET_BUF_SIZE = 5;
@@ -161,6 +177,27 @@ void loop() {
   static unsigned long last_heartbeat = 0;
   if (millis() - last_heartbeat > 5000) {  // 每5秒一次心跳
     Serial.println("[HEARTBEAT] System running, time: " + String(millis()/1000) + "s");
+    float filter_ratio = (nmea_received_count > 0) ? (float(nmea_sent_count)/float(nmea_received_count)*100) : 0;
+    Serial.println("[NMEA] Received: " + String(nmea_received_count) + 
+                   ", Sent: " + String(nmea_sent_count) + 
+                   ", Invalid: " + String(nmea_invalid_count) +
+                   ", Discarded: " + String(nmea_discarded_count) +
+                   ", Success: " + String(filter_ratio, 1) + "%");
+    Serial.println("[TYPES] GGA: " + String(gga_sent) + 
+                   ", RMC: " + String(rmc_sent) + 
+                   ", GST: " + String(gst_sent) +
+                   ", GSA: " + String(gsa_sent) +
+                   ", VTG: " + String(vtg_sent) +
+                   ", ZDA: " + String(zda_sent));
+    unsigned long now = millis();
+    Serial.println("[TIMING] GGA: " + String((now - last_gga_send)/1000.0, 1) + "s ago" +
+                   ", RMC: " + String((now - last_rmc_send)/1000.0, 1) + "s ago" +
+                   ", GST: " + String((now - last_gst_send)/1000.0, 1) + "s ago");
+    Serial.println("[TIMING2] GSA: " + String((now - last_gsa_send)/1000.0, 1) + "s ago" +
+                   ", VTG: " + String((now - last_vtg_send)/1000.0, 1) + "s ago" +
+                   ", ZDA: " + String((now - last_zda_send)/1000.0, 1) + "s ago");
+    Serial.println("[BUFFER] Size: " + String(nmea_input_buffer.length()) + 
+                   ", Preview: " + nmea_input_buffer.substring(0, min(30, (int)nmea_input_buffer.length())));
     last_heartbeat = millis();
   }
   
@@ -1271,31 +1308,86 @@ void send2Serial(HardwareSerial &port, const String str){
 }
 
 void printNMEAWithModifiedTimestampLocal(HardwareSerial &input_port, HardwareSerial &output_port, bool is_gnss_test) {
-  String nmea_line = "";
-  unsigned long start_time = millis();
-  
-  // Read NMEA sentence with timeout
-  while (input_port.available() && (millis() - start_time < 100)) {
+  while (input_port.available()) {
     char c = input_port.read();
-    if (c == '\n' || c == '\r') {
-      if (nmea_line.length() > 6) {  // Valid NMEA minimum length
-        processNMEASentence(nmea_line, output_port, is_gnss_test);
+
+    // ① 若收到新的 '$' 字元，代表一句新的開始
+    if (c == '$') {
+      // 只在緩衝區有實質內容且不是完整句子時才警告
+      if (nmea_input_buffer.length() > 10 && nmea_input_buffer.indexOf('*') == -1) {
+        nmea_discarded_count++;
+        if (is_debug) {
+          Serial.println("[WARN] Incomplete NMEA sentence discarded: " + nmea_input_buffer.substring(0, 20) + "...");
+        }
       }
-      nmea_line = "";
-    } else {
-      nmea_line += c;
+      nmea_input_buffer = "$";  // 重設累積字串
     }
-  }
-  
-  // Handle any remaining data
-  if (nmea_line.length() > 6) {
-    processNMEASentence(nmea_line, output_port, is_gnss_test);
+    // ② 結尾判斷，若遇到換行
+    else if (c == '\r' || c == '\n') {
+      if (nmea_input_buffer.length() > 6 && nmea_input_buffer.indexOf('*') != -1) {
+        // 送出完整一句處理
+        processNMEASentence(nmea_input_buffer, output_port, is_gnss_test);
+      }
+      nmea_input_buffer = ""; // 處理完清空
+    }
+    // ③ 中間其他字元 → 繼續累加
+    else {
+      // 防止緩衝區過大
+      if (nmea_input_buffer.length() < 200) {
+        nmea_input_buffer += c;
+      } else {
+        // 緩衝區過大，重設
+        nmea_discarded_count++;
+        nmea_input_buffer = "";
+        if (is_debug) {
+          Serial.println("[WARN] NMEA buffer overflow, reset.");
+        }
+      }
+    }
   }
 }
 
 void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool is_gnss_test) {
+  nmea_received_count++; // 統計接收到的句子數
+  
+  // MTi-680 只需要特定的NMEA句子類型
+  bool is_needed_sentence = nmea_sentence.startsWith("$GNGGA") || 
+                           nmea_sentence.startsWith("$GNRMC") || 
+                           nmea_sentence.startsWith("$GNGST") ||
+                           nmea_sentence.startsWith("$GNGSA") ||
+                           nmea_sentence.startsWith("$GNVTG") ||
+                           nmea_sentence.startsWith("$GNZDA");
+  
+  // 如果不是需要的句子類型，直接丟棄
+  if (!is_needed_sentence) {
+    return;
+  }
+  
+  // 分類型頻率控制：每種句子類型獨立控制1Hz頻率
+  bool should_send = false;
+  unsigned long current_time = millis();
+  
+  if (nmea_sentence.startsWith("$GNGGA")) {
+    should_send = (current_time - last_gga_send >= NMEA_SEND_INTERVAL);
+  } else if (nmea_sentence.startsWith("$GNRMC")) {
+    should_send = (current_time - last_rmc_send >= NMEA_SEND_INTERVAL);
+  } else if (nmea_sentence.startsWith("$GNGST")) {
+    should_send = (current_time - last_gst_send >= NMEA_SEND_INTERVAL);
+  } else if (nmea_sentence.startsWith("$GNGSA")) {
+    should_send = (current_time - last_gsa_send >= NMEA_SEND_INTERVAL);
+  } else if (nmea_sentence.startsWith("$GNVTG")) {
+    should_send = (current_time - last_vtg_send >= NMEA_SEND_INTERVAL);
+  } else if (nmea_sentence.startsWith("$GNZDA")) {
+    should_send = (current_time - last_zda_send >= NMEA_SEND_INTERVAL);
+  }
+  
+  if (!should_send) {
+    return; // 該類型句子還沒到發送時間
+  }
+  
   // Validate NMEA checksum
   if (!validateNMEAChecksum(nmea_sentence)) {
+    nmea_invalid_count++;
     if (is_debug) {
       Serial.println("Invalid NMEA checksum: " + nmea_sentence);
     }
@@ -1312,16 +1404,61 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
   // For GNSS test mode, just forward the data
   if (is_gnss_test) {
     output_port.println(nmea_sentence);
+    nmea_sent_count++;
+    
+    // 更新對應類型的發送時間戳
+    if (nmea_sentence.startsWith("$GNGGA")) {
+      last_gga_send = current_time;
+      gga_sent++;
+    } else if (nmea_sentence.startsWith("$GNRMC")) {
+      last_rmc_send = current_time;
+      rmc_sent++;
+    } else if (nmea_sentence.startsWith("$GNGST")) {
+      last_gst_send = current_time;
+      gst_sent++;
+    } else if (nmea_sentence.startsWith("$GNGSA")) {
+      last_gsa_send = current_time;
+      gsa_sent++;
+    } else if (nmea_sentence.startsWith("$GNVTG")) {
+      last_vtg_send = current_time;
+      vtg_sent++;
+    } else if (nmea_sentence.startsWith("$GNZDA")) {
+      last_zda_send = current_time;
+      zda_sent++;
+    }
+    
+    Serial.println("→ MTi-680: " + nmea_sentence);
     return;
   }
   
   // Parse and modify timestamp if needed
   String modified_sentence = modifyNMEATimestamp(nmea_sentence);
   output_port.println(modified_sentence);
+  nmea_sent_count++;
   
-  if (is_debug) {
-    Serial.println("NMEA: " + modified_sentence);
+  // 更新對應類型的發送時間戳
+  if (modified_sentence.startsWith("$GNGGA")) {
+    last_gga_send = current_time;
+    gga_sent++;
+  } else if (modified_sentence.startsWith("$GNRMC")) {
+    last_rmc_send = current_time;
+    rmc_sent++;
+  } else if (modified_sentence.startsWith("$GNGST")) {
+    last_gst_send = current_time;
+    gst_sent++;
+  } else if (modified_sentence.startsWith("$GNGSA")) {
+    last_gsa_send = current_time;
+    gsa_sent++;
+  } else if (modified_sentence.startsWith("$GNVTG")) {
+    last_vtg_send = current_time;
+    vtg_sent++;
+  } else if (modified_sentence.startsWith("$GNZDA")) {
+    last_zda_send = current_time;
+    zda_sent++;
   }
+  
+  // 總是顯示發送給MTi-680的數據
+  Serial.println("→ MTi-680: " + modified_sentence);
 }
 
 bool validateNMEAChecksum(String nmea_sentence) {
