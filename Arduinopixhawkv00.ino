@@ -194,6 +194,14 @@ void setup() {
   // initialize xsens mit-680 - 優化數據流暢性
   xsens.setDataRate(50);  // 從30Hz提升到50Hz，平衡性能與穩定性
   setXsensPackage();
+  
+  Serial.println("Step 5.1: Configuring MTi-680 GNSS Receiver...");
+  // 配置 MTi-680 GNSS 接收器設定
+  // 參數: baudrate=115200, update_rate=2Hz, talker_id=1(GN)
+  xsens.setGnssReceiverSettings(115200, 2, 1);
+  delay(1000);  // 等待配置完成
+  
+  Serial.println("Step 5.2: Starting measurement mode...");
   xsens.ToMeasurementMode();
   Serial.println("Step 5: Complete");
 
