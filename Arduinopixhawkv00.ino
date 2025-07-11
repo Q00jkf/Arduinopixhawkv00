@@ -160,12 +160,42 @@ void setup() {
   checkPX4CON();
   Serial.println("Step 3: Complete");
   
-  Serial.println("Step 4: Initializing Xsens (may take time)...");
+  Serial.println("Step 4: Initializing GNSS Module...");
+  // 初始化 GNSS 模組 - 啟用完整的 NMEA 句子輸出
+  delay(1000);  // 等待 GNSS 模組穩定
+  
+  // 啟用完整的 GNGSA 輸出 (包含衛星 PRN)
+  NMEA_IN_Serial.println("$PUBX,40,GSA,0,1,0,0,0,0*4E");
+  delay(100);
+  
+  // 啟用 GSV 句子 (衛星詳細資訊)
+  NMEA_IN_Serial.println("$PUBX,40,GSV,0,1,0,0,0,0*59");
+  delay(100);
+  
+  // 啟用 VTG 句子 (地面速度和航向)
+  NMEA_IN_Serial.println("$PUBX,40,VTG,0,1,0,0,0,0*5E");
+  delay(100);
+  
+  // 啟用 ZDA 句子 (UTC 時間)
+  NMEA_IN_Serial.println("$PUBX,40,ZDA,0,1,0,0,0,0*44");
+  delay(100);
+  
+  // 設定 GNSS 輸出率為 1Hz
+  NMEA_IN_Serial.println("$PUBX,40,GGA,0,1,0,0,0,0*5A");
+  delay(100);
+  NMEA_IN_Serial.println("$PUBX,40,RMC,0,1,0,0,0,0*47");
+  delay(100);
+  NMEA_IN_Serial.println("$PUBX,40,GST,0,1,0,0,0,0*5B");
+  delay(100);
+  
+  Serial.println("Step 4: GNSS Module initialized - waiting for satellite lock...");
+  
+  Serial.println("Step 5: Initializing Xsens (may take time)...");
   // initialize xsens mit-680 - 優化數據流暢性
   xsens.setDataRate(50);  // 從30Hz提升到50Hz，平衡性能與穩定性
   setXsensPackage();
   xsens.ToMeasurementMode();
-  Serial.println("Step 4: Complete");
+  Serial.println("Step 5: Complete");
 
   delay(100);
   is_run = true;
