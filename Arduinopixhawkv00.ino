@@ -90,7 +90,7 @@ unsigned long last_gst_send = 0;            // 上次發送GST的時間
 unsigned long last_gsa_send = 0;            // 上次發送GSA的時間
 unsigned long last_vtg_send = 0;            // 上次發送VTG的時間
 unsigned long last_zda_send = 0;            // 上次發送ZDA的時間
-const unsigned long NMEA_SEND_INTERVAL = 1000; // 1Hz (每種類型每秒1次)
+// const unsigned long NMEA_SEND_INTERVAL = 1000; // 1Hz (每種類型每秒1次) - DISABLED
 unsigned long nmea_received_count = 0;       // 接收到的NMEA句子總數
 unsigned long nmea_sent_count = 0;           // 發送到MTi-680的句子數
 unsigned long nmea_invalid_count = 0;        // 無效NMEA句子數
@@ -1401,27 +1401,27 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
     return;
   }
   
-  // 分類型頻率控制：每種句子類型獨立控制1Hz頻率
-  bool should_send = false;
-  unsigned long current_time = millis();
-  
-  if (nmea_sentence.startsWith("$GNGGA")) {
-    should_send = (current_time - last_gga_send >= NMEA_SEND_INTERVAL);
-  } else if (nmea_sentence.startsWith("$GNRMC")) {
-    should_send = (current_time - last_rmc_send >= NMEA_SEND_INTERVAL);
-  } else if (nmea_sentence.startsWith("$GNGST")) {
-    should_send = (current_time - last_gst_send >= NMEA_SEND_INTERVAL);
-  } else if (nmea_sentence.startsWith("$GNGSA")) {
-    should_send = (current_time - last_gsa_send >= NMEA_SEND_INTERVAL);
-  } else if (nmea_sentence.startsWith("$GNVTG")) {
-    should_send = (current_time - last_vtg_send >= NMEA_SEND_INTERVAL);
-  } else if (nmea_sentence.startsWith("$GNZDA")) {
-    should_send = (current_time - last_zda_send >= NMEA_SEND_INTERVAL);
-  }
-  
-  if (!should_send) {
-    return; // 該類型句子還沒到發送時間
-  }
+  // 分類型頻率控制：每種句子類型獨立控制1Hz頻率 - DISABLED
+  // bool should_send = false;
+  unsigned long current_time = millis();  // Keep this for timestamp updates
+  // 
+  // if (nmea_sentence.startsWith("$GNGGA")) {
+  //   should_send = (current_time - last_gga_send >= NMEA_SEND_INTERVAL);
+  // } else if (nmea_sentence.startsWith("$GNRMC")) {
+  //   should_send = (current_time - last_rmc_send >= NMEA_SEND_INTERVAL);
+  // } else if (nmea_sentence.startsWith("$GNGST")) {
+  //   should_send = (current_time - last_gst_send >= NMEA_SEND_INTERVAL);
+  // } else if (nmea_sentence.startsWith("$GNGSA")) {
+  //   should_send = (current_time - last_gsa_send >= NMEA_SEND_INTERVAL);
+  // } else if (nmea_sentence.startsWith("$GNVTG")) {
+  //   should_send = (current_time - last_vtg_send >= NMEA_SEND_INTERVAL);
+  // } else if (nmea_sentence.startsWith("$GNZDA")) {
+  //   should_send = (current_time - last_zda_send >= NMEA_SEND_INTERVAL);
+  // }
+  // 
+  // if (!should_send) {
+  //   return; // 該類型句子還沒到發送時間
+  // }
   
   // Validate NMEA checksum
   if (!validateNMEAChecksum(nmea_sentence)) {
