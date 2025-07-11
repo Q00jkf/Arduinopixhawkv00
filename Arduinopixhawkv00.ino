@@ -90,7 +90,7 @@ unsigned long last_gst_send = 0;            // 上次發送GST的時間
 unsigned long last_gsa_send = 0;            // 上次發送GSA的時間
 unsigned long last_vtg_send = 0;            // 上次發送VTG的時間
 unsigned long last_zda_send = 0;            // 上次發送ZDA的時間
-const unsigned long NMEA_SEND_INTERVAL = 1000; // 1Hz (每種類型每秒1次)
+// const unsigned long NMEA_SEND_INTERVAL = 1000; // 1Hz (每種類型每秒1次) - DISABLED
 unsigned long nmea_received_count = 0;       // 接收到的NMEA句子總數
 unsigned long nmea_sent_count = 0;           // 發送到MTi-680的句子數
 unsigned long nmea_invalid_count = 0;        // 無效NMEA句子數
@@ -160,12 +160,50 @@ void setup() {
   checkPX4CON();
   Serial.println("Step 3: Complete");
   
-  Serial.println("Step 4: Initializing Xsens (may take time)...");
+  Serial.println("Step 4: Initializing GNSS Module...");
+  // 初始化 GNSS 模組 - 啟用完整的 NMEA 句子輸出
+  delay(1000);  // 等待 GNSS 模組穩定
+  
+  // 啟用完整的 GNGSA 輸出 (包含衛星 PRN)
+  NMEA_IN_Serial.println("$PUBX,40,GSA,0,1,0,0,0,0*4E");
+  delay(100);
+  
+  // 啟用 GSV 句子 (衛星詳細資訊)
+  NMEA_IN_Serial.println("$PUBX,40,GSV,0,1,0,0,0,0*59");
+  delay(100);
+  
+  // 啟用 VTG 句子 (地面速度和航向)
+  NMEA_IN_Serial.println("$PUBX,40,VTG,0,1,0,0,0,0*5E");
+  delay(100);
+  
+  // 啟用 ZDA 句子 (UTC 時間)
+  NMEA_IN_Serial.println("$PUBX,40,ZDA,0,1,0,0,0,0*44");
+  delay(100);
+  
+  // 設定 GNSS 輸出率為 1Hz
+  NMEA_IN_Serial.println("$PUBX,40,GGA,0,1,0,0,0,0*5A");
+  delay(100);
+  NMEA_IN_Serial.println("$PUBX,40,RMC,0,1,0,0,0,0*47");
+  delay(100);
+  NMEA_IN_Serial.println("$PUBX,40,GST,0,1,0,0,0,0*5B");
+  delay(100);
+  
+  Serial.println("Step 4: GNSS Module initialized - waiting for satellite lock...");
+  
+  Serial.println("Step 5: Initializing Xsens (may take time)...");
   // initialize xsens mit-680 - 優化數據流暢性
   xsens.setDataRate(50);  // 從30Hz提升到50Hz，平衡性能與穩定性
   setXsensPackage();
+  
+  Serial.println("Step 5.1: Configuring MTi-680 GNSS Receiver...");
+  // 配置 MTi-680 GNSS 接收器設定
+  // 參數: baudrate=115200, update_rate=2Hz, talker_id=1(GN)
+  xsens.setGnssReceiverSettings(115200, 2, 1);
+  delay(1000);  // 等待配置完成
+  
+  Serial.println("Step 5.2: Starting measurement mode...");
   xsens.ToMeasurementMode();
-  Serial.println("Step 4: Complete");
+  Serial.println("Step 5: Complete");
 
   delay(100);
   is_run = true;
@@ -176,7 +214,7 @@ void loop() {
   // 除錯：心跳信號，確認程式正在運行
   static unsigned long last_heartbeat = 0;
   if (millis() - last_heartbeat > 5000) {  // 每5秒一次心跳
-    Serial.println("[HEARTBEAT] System running, time: " + String(millis()/1000) + "s");
+    Serial.println("[HEARTBEAT] System running, time: " + String(millis()/1000) + "s, Debug: " + (is_debug ? "ON" : "OFF"));
     float filter_ratio = (nmea_received_count > 0) ? (float(nmea_sent_count)/float(nmea_received_count)*100) : 0;
     Serial.println("[NMEA] Received: " + String(nmea_received_count) + 
                    ", Sent: " + String(nmea_sent_count) + 
@@ -1069,6 +1107,16 @@ void checkSTR_CMD(String command){
   else if (command == "CALI_GYRO") {
     xsens.caliGyro(10, &PIXHAWK_SERIAL);
   }
+  
+  else if (command == "DEBUG_ON") {
+    is_debug = true;
+    send2Serial(PIXHAWK_SERIAL, "Debug Mode ON - NMEA data output enabled");
+  }
+  
+  else if (command == "DEBUG_OFF") {
+    is_debug = false;
+    send2Serial(PIXHAWK_SERIAL, "Debug Mode OFF - NMEA data output disabled");
+  }
 
   else if (command.startsWith("SECURITY_CHECK")) {
     // Rate limiting - prevent DoS
@@ -1363,27 +1411,27 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
     return;
   }
   
-  // 分類型頻率控制：每種句子類型獨立控制1Hz頻率
-  bool should_send = false;
-  unsigned long current_time = millis();
-  
-  if (nmea_sentence.startsWith("$GNGGA")) {
-    should_send = (current_time - last_gga_send >= NMEA_SEND_INTERVAL);
-  } else if (nmea_sentence.startsWith("$GNRMC")) {
-    should_send = (current_time - last_rmc_send >= NMEA_SEND_INTERVAL);
-  } else if (nmea_sentence.startsWith("$GNGST")) {
-    should_send = (current_time - last_gst_send >= NMEA_SEND_INTERVAL);
-  } else if (nmea_sentence.startsWith("$GNGSA")) {
-    should_send = (current_time - last_gsa_send >= NMEA_SEND_INTERVAL);
-  } else if (nmea_sentence.startsWith("$GNVTG")) {
-    should_send = (current_time - last_vtg_send >= NMEA_SEND_INTERVAL);
-  } else if (nmea_sentence.startsWith("$GNZDA")) {
-    should_send = (current_time - last_zda_send >= NMEA_SEND_INTERVAL);
-  }
-  
-  if (!should_send) {
-    return; // 該類型句子還沒到發送時間
-  }
+  // 分類型頻率控制：每種句子類型獨立控制1Hz頻率 - DISABLED
+  // bool should_send = false;
+  unsigned long current_time = millis();  // Keep this for timestamp updates
+  // 
+  // if (nmea_sentence.startsWith("$GNGGA")) {
+  //   should_send = (current_time - last_gga_send >= NMEA_SEND_INTERVAL);
+  // } else if (nmea_sentence.startsWith("$GNRMC")) {
+  //   should_send = (current_time - last_rmc_send >= NMEA_SEND_INTERVAL);
+  // } else if (nmea_sentence.startsWith("$GNGST")) {
+  //   should_send = (current_time - last_gst_send >= NMEA_SEND_INTERVAL);
+  // } else if (nmea_sentence.startsWith("$GNGSA")) {
+  //   should_send = (current_time - last_gsa_send >= NMEA_SEND_INTERVAL);
+  // } else if (nmea_sentence.startsWith("$GNVTG")) {
+  //   should_send = (current_time - last_vtg_send >= NMEA_SEND_INTERVAL);
+  // } else if (nmea_sentence.startsWith("$GNZDA")) {
+  //   should_send = (current_time - last_zda_send >= NMEA_SEND_INTERVAL);
+  // }
+  // 
+  // if (!should_send) {
+  //   return; // 該類型句子還沒到發送時間
+  // }
   
   // Validate NMEA checksum
   if (!validateNMEAChecksum(nmea_sentence)) {
@@ -1427,7 +1475,9 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
       zda_sent++;
     }
     
-    Serial.println("→ MTi-680: " + nmea_sentence);
+    if (is_debug) {
+      Serial.println("→ MTi-680: " + nmea_sentence);
+    }
     return;
   }
   
@@ -1457,8 +1507,10 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
     zda_sent++;
   }
   
-  // 總是顯示發送給MTi-680的數據
-  Serial.println("→ MTi-680: " + modified_sentence);
+  // 調試模式：顯示發送給MTi-680的數據
+  if (is_debug) {
+    Serial.println("→ MTi-680: " + modified_sentence);
+  }
 }
 
 bool validateNMEAChecksum(String nmea_sentence) {
@@ -1958,7 +2010,7 @@ void adaptiveCovariance(mavlink_odometry_t &odom, float trust_factor) {
   float min_vel_cov = 1e-6f;       // 最高速度精度 (1 mm/s)
   
   float max_att_cov = 1e-1f;       // 最大姿態不確定性 (約5.7度)
-  float min_att_cov = 1e-7f;       // 最高姿態精度 (約0.000006度)
+  float min_att_cov = 1e-6f;       // 最高姿態精度 (調高到1e-6)
   
   // YAW軸專用信任因子計算
   float yaw_trust_factor = calculateYawTrustFactor();
@@ -1995,8 +2047,8 @@ void adaptiveCovariance(mavlink_odometry_t &odom, float trust_factor) {
   odom.velocity_covariance[28] = att_cov * 5.0f;    // pitch rate variance
   odom.velocity_covariance[35] = yaw_att_cov * 3.0f;    // yaw rate variance (使用專用信任因子)
   
-  // 品質評分：更激進的映射
-  odom.quality = (uint8_t)(30 + trust_factor * 70); // 30-100 範圍，更大的動態範圍
+  // 品質評分：設定為最高品質
+  odom.quality = 100; // 固定為最高品質100
   
   // 極高信任度時使用更積極的估計器類型
   if (trust_factor > 0.8f) {
