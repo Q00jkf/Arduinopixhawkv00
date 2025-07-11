@@ -214,7 +214,7 @@ void loop() {
   // 除錯：心跳信號，確認程式正在運行
   static unsigned long last_heartbeat = 0;
   if (millis() - last_heartbeat > 5000) {  // 每5秒一次心跳
-    Serial.println("[HEARTBEAT] System running, time: " + String(millis()/1000) + "s");
+    Serial.println("[HEARTBEAT] System running, time: " + String(millis()/1000) + "s, Debug: " + (is_debug ? "ON" : "OFF"));
     float filter_ratio = (nmea_received_count > 0) ? (float(nmea_sent_count)/float(nmea_received_count)*100) : 0;
     Serial.println("[NMEA] Received: " + String(nmea_received_count) + 
                    ", Sent: " + String(nmea_sent_count) + 
@@ -1107,6 +1107,16 @@ void checkSTR_CMD(String command){
   else if (command == "CALI_GYRO") {
     xsens.caliGyro(10, &PIXHAWK_SERIAL);
   }
+  
+  else if (command == "DEBUG_ON") {
+    is_debug = true;
+    send2Serial(PIXHAWK_SERIAL, "Debug Mode ON - NMEA data output enabled");
+  }
+  
+  else if (command == "DEBUG_OFF") {
+    is_debug = false;
+    send2Serial(PIXHAWK_SERIAL, "Debug Mode OFF - NMEA data output disabled");
+  }
 
   else if (command.startsWith("SECURITY_CHECK")) {
     // Rate limiting - prevent DoS
@@ -1465,7 +1475,9 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
       zda_sent++;
     }
     
-    Serial.println("→ MTi-680: " + nmea_sentence);
+    if (is_debug) {
+      Serial.println("→ MTi-680: " + nmea_sentence);
+    }
     return;
   }
   
@@ -1495,8 +1507,10 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
     zda_sent++;
   }
   
-  // 總是顯示發送給MTi-680的數據
-  Serial.println("→ MTi-680: " + modified_sentence);
+  // 調試模式：顯示發送給MTi-680的數據
+  if (is_debug) {
+    Serial.println("→ MTi-680: " + modified_sentence);
+  }
 }
 
 bool validateNMEAChecksum(String nmea_sentence) {
@@ -1996,7 +2010,7 @@ void adaptiveCovariance(mavlink_odometry_t &odom, float trust_factor) {
   float min_vel_cov = 1e-6f;       // 最高速度精度 (1 mm/s)
   
   float max_att_cov = 1e-1f;       // 最大姿態不確定性 (約5.7度)
-  float min_att_cov = 1e-7f;       // 最高姿態精度 (約0.000006度)
+  float min_att_cov = 1e-6f;       // 最高姿態精度 (調高到1e-6)
   
   // YAW軸專用信任因子計算
   float yaw_trust_factor = calculateYawTrustFactor();
@@ -2033,8 +2047,8 @@ void adaptiveCovariance(mavlink_odometry_t &odom, float trust_factor) {
   odom.velocity_covariance[28] = att_cov * 5.0f;    // pitch rate variance
   odom.velocity_covariance[35] = yaw_att_cov * 3.0f;    // yaw rate variance (使用專用信任因子)
   
-  // 品質評分：更激進的映射
-  odom.quality = (uint8_t)(30 + trust_factor * 70); // 30-100 範圍，更大的動態範圍
+  // 品質評分：設定為最高品質
+  odom.quality = 100; // 固定為最高品質100
   
   // 極高信任度時使用更積極的估計器類型
   if (trust_factor > 0.8f) {
