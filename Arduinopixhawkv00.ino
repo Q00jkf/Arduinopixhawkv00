@@ -138,8 +138,8 @@ bool isTimestampCompatible(const String& ts1, const String& ts2) {
     diff = min(diff, 100 - diff);
   }
   
-  // 允許1秒的容差
-  return diff <= 1.0;
+  // 嚴格匹配：只允許±0.1秒的容差，確保同組數據時間戳一致
+  return diff <= 0.1;
 }
 
 NMEADataset current_dataset;           // 當前正在收集的數據組
@@ -1495,12 +1495,12 @@ void resetCurrentDataset() {
   current_dataset.collect_start_time = millis();
 }
 
-// 檢查數據組是否完整 (XSENS標準：GGA + RMC + GST + 至少1個GSA)
+// 檢查數據組是否完整 (XSENS標準：GGA + RMC + GST + 4個GSA)
 bool isDatasetComplete() {
   return (current_dataset.has_gga && 
           current_dataset.has_rmc && 
           current_dataset.has_gst && 
-          current_dataset.gsa_count >= 1);  // 至少需要1個GSA
+          current_dataset.gsa_count >= 4);  // 需要收集完4個GSA
 }
 
 // 發送完整的同步數據組到XSENS MTi-680
