@@ -1540,11 +1540,12 @@ void sendSynchronizedDataset(HardwareSerial &output_port) {
   
   // 3. 發送GST句子 (誤差估計)
   if (current_dataset.has_gst) {
-    output_port.println(current_dataset.gst_sentence);
+    String normalized_gst = normalizeNMEASentence(current_dataset.gst_sentence);
+    output_port.println(normalized_gst);
     gst_sent++;
     nmea_sent_count++;
     if (is_debug) {
-      Serial.println("→ MTi-680: " + current_dataset.gst_sentence);
+      Serial.println("→ MTi-680: " + normalized_gst);
     }
   }
   
@@ -2294,28 +2295,39 @@ String normalizeTimestampFormat(const String& timestamp) {
   return timestamp;
 }
 
-// 標準化整個NMEA句子中的時間戳格式
+// 格式化速度字段為標準格式 (XXX.XXX)
+String formatSpeedField(const String& speed) {
+  float speed_val = speed.toFloat();
+  return String(speed_val, 3).substring(0, 7); // 確保格式為XXX.XXX
+}
+
+// 標準化整個NMEA句子中的時間戳和其他字段格式
 String normalizeNMEASentence(const String& nmea_sentence) {
-  if (nmea_sentence.startsWith("$GNGGA") || nmea_sentence.startsWith("$GNRMC")) {
-    // 找到時間戳字段（第二個逗號之間）
-    int first_comma = nmea_sentence.indexOf(',');
+  String result = nmea_sentence;
+  
+  // 步驟1: 處理包含時間戳的句子
+  if (nmea_sentence.startsWith("$GNGGA") || 
+      nmea_sentence.startsWith("$GNRMC") || 
+      nmea_sentence.startsWith("$GNGST")) {
+    // 標準化時間戳字段（第二個逗號之間）
+    int first_comma = result.indexOf(',');
     if (first_comma != -1) {
-      int second_comma = nmea_sentence.indexOf(',', first_comma + 1);
+      int second_comma = result.indexOf(',', first_comma + 1);
       if (second_comma != -1) {
-        String timestamp = nmea_sentence.substring(first_comma + 1, second_comma);
+        String timestamp = result.substring(first_comma + 1, second_comma);
         String normalized_timestamp = normalizeTimestampFormat(timestamp);
         
         // 重構NMEA句子
-        String result = nmea_sentence.substring(0, first_comma + 1);
+        result = result.substring(0, first_comma + 1);
         result += normalized_timestamp;
         result += nmea_sentence.substring(second_comma);
-        
-        return result;
       }
     }
   }
   
-  // 對於其他句子類型，直接返回原句子
-  return nmea_sentence;
+  // 暫時禁用速度格式化，專注於時間戳問題
+  // TODO: 修復GNRMC速度格式化邏輯
+  
+  return result;
 }
 
