@@ -2325,8 +2325,55 @@ String normalizeNMEASentence(const String& nmea_sentence) {
     }
   }
   
-  // 暫時禁用速度格式化，專注於時間戳問題
-  // TODO: 修復GNRMC速度格式化邏輯
+  // 步驟2: 特殊處理GNRMC句子的速度字段
+  if (result.startsWith("$GNRMC")) {
+    // 解析GNRMC字段並重新格式化速度
+    String fields[15]; // GNRMC最多15個字段
+    int field_count = 0;
+    int start = 0;
+    
+    // 分割字段
+    for (int i = 0; i <= result.length() && field_count < 15; i++) {
+      if (i == result.length() || result.charAt(i) == ',') {
+        fields[field_count] = result.substring(start, i);
+        field_count++;
+        start = i + 1;
+      }
+    }
+    
+    // 格式化速度字段（第8個字段，索引7）
+    // GNRMC格式: $GNRMC,time,status,lat,N/S,lon,E/W,speed,course,date,variation,E/W,checksum
+    //           0     1    2      3   4   5   6   7     8     9    10        11  12
+    if (field_count > 7 && fields[7].length() > 0) {
+      float speed_val = fields[7].toFloat();
+      
+      // 格式化為 XXX.XXX 格式
+      int integer_part = (int)speed_val;
+      int decimal_part = (int)((speed_val - integer_part) * 1000);
+      
+      String formatted_speed = "";
+      if (integer_part < 100) formatted_speed += "0";
+      if (integer_part < 10) formatted_speed += "0";
+      formatted_speed += String(integer_part);
+      formatted_speed += ".";
+      if (decimal_part < 100) formatted_speed += "0";
+      if (decimal_part < 10) formatted_speed += "0";
+      formatted_speed += String(decimal_part);
+      
+      fields[7] = formatted_speed;
+      
+      // 調試信息可以在需要時重新啟用
+    }
+    
+    // 重新組裝GNRMC句子
+    result = "";
+    for (int i = 0; i < field_count; i++) {
+      result += fields[i];
+      if (i < field_count - 1) {
+        result += ",";
+      }
+    }
+  }
   
   return result;
 }
