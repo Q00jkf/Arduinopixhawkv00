@@ -25,6 +25,10 @@ float calculateTrustFactor();
 float calculateYawTrustFactor();
 void adaptiveCovariance(mavlink_odometry_t &odom, float trust_factor);
 
+// NMEA 時間戳格式標準化函數聲明
+String normalizeTimestampFormat(const String& timestamp);
+String normalizeNMEASentence(const String& nmea_sentence);
+
 #define PIXHAWK_SERIAL Serial1
 #define Serial_xsens Serial2
 #define NMEA_OUT_Serial Serial3
@@ -1513,11 +1517,12 @@ void sendSynchronizedDataset(HardwareSerial &output_port) {
   
   // 1. 發送GGA句子 (位置數據)
   if (current_dataset.has_gga) {
-    output_port.println(current_dataset.gga_sentence);
+    String normalized_gga = normalizeNMEASentence(current_dataset.gga_sentence);
+    output_port.println(normalized_gga);
     gga_sent++;
     nmea_sent_count++;
     if (is_debug) {
-      Serial.println("→ MTi-680: " + current_dataset.gga_sentence);
+      Serial.println("→ MTi-680: " + normalized_gga);
     }
   }
   
@@ -1545,11 +1550,12 @@ void sendSynchronizedDataset(HardwareSerial &output_port) {
   
   // 4. 發送RMC句子 (推薦最小數據)
   if (current_dataset.has_rmc) {
-    output_port.println(current_dataset.rmc_sentence);
+    String normalized_rmc = normalizeNMEASentence(current_dataset.rmc_sentence);
+    output_port.println(normalized_rmc);
     rmc_sent++;
     nmea_sent_count++;
     if (is_debug) {
-      Serial.println("→ MTi-680: " + current_dataset.rmc_sentence);
+      Serial.println("→ MTi-680: " + normalized_rmc);
     }
   }
   
@@ -1596,7 +1602,8 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
   
   // For GNSS test mode, use legacy direct forwarding
   if (is_gnss_test) {
-    output_port.println(nmea_sentence);
+    String normalized_sentence = normalizeNMEASentence(nmea_sentence);
+    output_port.println(normalized_sentence);
     nmea_sent_count++;
     
     // 更新對應類型的發送時間戳
@@ -1622,7 +1629,7 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
     }
     
     if (is_debug) {
-      Serial.println("→ MTi-680: " + nmea_sentence);
+      Serial.println("→ MTi-680: " + normalized_sentence);
     }
     return;
   }
@@ -2258,5 +2265,57 @@ void adaptiveCovariance(mavlink_odometry_t &odom, float trust_factor) {
   } else {
     odom.estimator_type = MAV_ESTIMATOR_TYPE_NAIVE;  // 基本估計器
   }
+}
+
+// ==================== NMEA 時間戳格式標準化功能 ====================
+
+// 將時間戳從3位小數格式轉換為2位小數格式
+// 例如: "135937.500" -> "135937.50"
+String normalizeTimestampFormat(const String& timestamp) {
+  if (timestamp.length() < 6) {
+    return timestamp;
+  }
+  
+  int dot_pos = timestamp.indexOf('.');
+  if (dot_pos == -1) {
+    return timestamp;
+  }
+  
+  // 如果已經是2位小數，直接返回
+  if (timestamp.length() == dot_pos + 3) {
+    return timestamp;
+  }
+  
+  // 如果是3位小數，截取為2位小數
+  if (timestamp.length() == dot_pos + 4) {
+    return timestamp.substring(0, dot_pos + 3);
+  }
+  
+  return timestamp;
+}
+
+// 標準化整個NMEA句子中的時間戳格式
+String normalizeNMEASentence(const String& nmea_sentence) {
+  if (nmea_sentence.startsWith("$GNGGA") || nmea_sentence.startsWith("$GNRMC")) {
+    // 找到時間戳字段（第二個逗號之間）
+    int first_comma = nmea_sentence.indexOf(',');
+    if (first_comma != -1) {
+      int second_comma = nmea_sentence.indexOf(',', first_comma + 1);
+      if (second_comma != -1) {
+        String timestamp = nmea_sentence.substring(first_comma + 1, second_comma);
+        String normalized_timestamp = normalizeTimestampFormat(timestamp);
+        
+        // 重構NMEA句子
+        String result = nmea_sentence.substring(0, first_comma + 1);
+        result += normalized_timestamp;
+        result += nmea_sentence.substring(second_comma);
+        
+        return result;
+      }
+    }
+  }
+  
+  // 對於其他句子類型，直接返回原句子
+  return nmea_sentence;
 }
 
