@@ -3,6 +3,7 @@
 #include "myUARTSensor.h"
 #include "myUART.h"
 #include "Orientation.h"
+#include "gnss_ahrs_fusion.h"
 
 // Function declarations
 void performSecurityCheck(HardwareSerial &port, bool silent_mode);
@@ -44,6 +45,10 @@ uint8_t current_Xsens_mode = MODE_AHRS; // 編號: 1
 uint8_t current_output_mode = OUT_MODE_BIN;
 bool is_run = false;  
 bool is_debug = false;
+
+// GNSS-AHRS 融合模組
+GNSSAHRSFusion fusion_module;
+bool fusion_mode_enabled = false;
 bool ISR_flag_xsens = false, ISR_flag_NMEA = false;
 bool USB_Setting_mode = false;
 bool enable_input = true;
@@ -380,6 +385,27 @@ void loop() {
     }
   }
 
+  // 融合模組處理與 MAVLink 發送
+  if (fusion_mode_enabled && is_run) {
+    static unsigned long last_fusion_send = 0;
+    if (millis() - last_fusion_send >= 20) { // 50Hz
+      if (fusion_module.sendMAVLinkOdometry(PIXHAWK_SERIAL)) {
+        last_fusion_send = millis();
+      }
+    }
+    
+    // 融合狀態報告 (每 2 秒一次)
+    static unsigned long last_fusion_report = 0;
+    if (is_debug && millis() - last_fusion_report >= 2000) {
+      FusionStatus status = fusion_module.getFusionStatus();
+      Serial.println("[FUSION] Active: " + String(status.fusion_active ? "YES" : "NO") + 
+                     ", GNSS: " + String(status.gnss_valid ? "OK" : "FAIL") + 
+                     ", MTDATA2: " + String(status.mtdata2_valid ? "OK" : "FAIL") + 
+                     ", MAVLink: " + String(status.mavlink_send_count));
+      last_fusion_report = millis();
+    }
+  }
+
   if (PIXHAWK_SERIAL.available() && enable_input){
     if (current_output_mode == OUT_MODE_BIN && PIXHAWK_SERIAL.available() >= 0x20) {
       mavlink_message_t msg;
@@ -487,6 +513,11 @@ void readXsens(){
         // 更新全域 orientation 數據
         latest_orientation.float_val[0] = ori.float_val[0]; // pitch
         latest_orientation.float_val[1] = ori.float_val[1]; // roll
+        
+        // 融合模組處理 MTDATA2 資料
+        if (fusion_mode_enabled) {
+          fusion_module.updateMTData2(qut, omg, acc, ori, XsensTime.ulong_val);
+        }
         latest_orientation.float_val[2] = ori.float_val[2]; // yaw
         orientation_data_available = true;
         
@@ -1136,6 +1167,34 @@ void checkSTR_CMD(String command){
     send2Serial(PIXHAWK_SERIAL, "Set Binary Output...");
     sendProcessingDataAndStartMeas(PIXHAWK_SERIAL);
   } 
+  else if (command == "FUSION_ON"){
+    fusion_mode_enabled = true;
+    fusion_module.setDebugMode(is_debug);
+    current_Xsens_mode = MODE_AHRS;
+    send2Serial(PIXHAWK_SERIAL, "GNSS-AHRS Fusion Mode ENABLED");
+    send2Serial(PIXHAWK_SERIAL, "XSENS: AHRS Mode, GNSS: Position/Velocity");
+    setXsensPackage();
+    sendProcessingDataAndStartMeas(PIXHAWK_SERIAL);
+  }
+  else if (command == "FUSION_OFF"){
+    fusion_mode_enabled = false;
+    send2Serial(PIXHAWK_SERIAL, "GNSS-AHRS Fusion Mode DISABLED");
+  }
+  else if (command == "FUSION_STATUS"){
+    if (fusion_mode_enabled) {
+      send2Serial(PIXHAWK_SERIAL, "Fusion Mode: ENABLED");
+      fusion_module.printDetailedStatus();
+    } else {
+      send2Serial(PIXHAWK_SERIAL, "Fusion Mode: DISABLED");
+    }
+  }
+  else if (command == "FUSION_DIAG"){
+    if (fusion_mode_enabled) {
+      fusion_module.runDiagnostics();
+    } else {
+      send2Serial(PIXHAWK_SERIAL, "Fusion Mode: DISABLED - Enable first with FUSION_ON");
+    }
+  }
   else if (command == "STR"){
     current_output_mode = OUT_MODE_STR;
     send2Serial(PIXHAWK_SERIAL, "Set String Output...");
@@ -1592,6 +1651,11 @@ void sendSynchronizedDataset(HardwareSerial &output_port) {
 
 void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool is_gnss_test) {
   nmea_received_count++; // 統計接收到的句子數
+  
+  // 融合模組處理 GNSS 資料
+  if (fusion_mode_enabled) {
+    fusion_module.updateGNSSData(nmea_sentence);
+  }
   
   // MTi-680 只需要特定的NMEA句子類型 (包含XSENS新增需求)
   bool is_needed_sentence = nmea_sentence.startsWith("$GNGGA") || 
