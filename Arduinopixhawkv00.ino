@@ -150,8 +150,8 @@ bool isTimestampCompatible(const String& ts1, const String& ts2) {
     diff = min(diff, 100 - diff);
   }
   
-  // 嚴格匹配：只允許±0.1秒的容差，確保同組數據時間戳一致
-  return diff <= 0.1;
+  // 放寬匹配：允許±0.3秒的容差，支援4Hz數據 (250ms間隔)
+  return diff <= 0.3;
 }
 
 NMEADataset current_dataset;           // 當前正在收集的數據組
@@ -258,8 +258,8 @@ void setup() {
   
   Serial.println("Step 5.1: Configuring MTi-680 GNSS Receiver...");
   // 配置 MTi-680 GNSS 接收器設定
-  // 參數: baudrate=115200, update_rate=2Hz, talker_id=1(GN)
-  xsens.setGnssReceiverSettings(115200, 2, 1);
+  // 參數: baudrate=115200, update_rate=4Hz, talker_id=1(GN)
+  xsens.setGnssReceiverSettings(115200, 4, 1);
   delay(1000);  // 等待配置完成
   
   Serial.println("Step 5.2: Starting measurement mode...");
@@ -1273,7 +1273,7 @@ void checkSTR_CMD(String command){
     MyQuaternion::Quaternion qut(0, radians(180), radians(-90));
     xsens.ToConfigMode();
     xsens.setAlignmentRotation(qut.getQ()[3], qut.getQ()[0], qut.getQ()[1], qut.getQ()[2]);
-    xsens.setGnssReceiverSettings(115200, 2, 1);
+    xsens.setGnssReceiverSettings(115200, 4, 1);
     xsens.InitMT();
     xsens.ToMeasurementMode();
     delay(500);
@@ -1286,75 +1286,74 @@ void checkSTR_CMD(String command){
       if (checkLOCOSYS_ACK(NMEA_IN_Serial)) { break; }
     }  
 
-    send2Serial(NMEA_IN_Serial, "$PAIR062,2,1*3D");   // enable GSA
+    // 根據 LOCOSYS 文檔，需要使用正確的頻率代碼
+    // 注意：250ms 可能不是正確的參數，應該使用頻率代碼
+    Serial.println("Setting LOCOSYS to 4Hz output rate...");
+    
+    // 先嘗試設定為更高頻率 (參數可能需要調整)
+    send2Serial(NMEA_IN_Serial, "$PAIR062,0,4*66");    // set GGA to 4Hz  
     checkLOCOSYS_ACK(NMEA_IN_Serial);
-    send2Serial(NMEA_IN_Serial, "$PAIR513*3D");
+    delay(200);
+    send2Serial(NMEA_IN_Serial, "$PAIR062,4,4*62");    // set RMC to 4Hz
     checkLOCOSYS_ACK(NMEA_IN_Serial);
-    send2Serial(NMEA_IN_Serial, "$PAIR002*38");
+    delay(200);
+    send2Serial(NMEA_IN_Serial, "$PAIR062,8,4*6E");    // set GST to 4Hz
+    checkLOCOSYS_ACK(NMEA_IN_Serial);
+    delay(200);
+    send2Serial(NMEA_IN_Serial, "$PAIR062,2,4*64");    // set GSA to 4Hz
+    checkLOCOSYS_ACK(NMEA_IN_Serial);
+    delay(500);
+
+    // 保存設定並重啟 GNSS
+    send2Serial(NMEA_IN_Serial, "$PAIR513*3D");       // save settings to memory
+    checkLOCOSYS_ACK(NMEA_IN_Serial);
+    send2Serial(NMEA_IN_Serial, "$PAIR002*38");       // restart GNSS
     checkLOCOSYS_ACK(NMEA_IN_Serial);
     delay(1000);
-    for (int i=0;i<5;i++){
-      send2Serial(NMEA_IN_Serial, "$PAIR003*39");
-      if (checkLOCOSYS_ACK(NMEA_IN_Serial)) { break; }
-    }  
-
-    send2Serial(NMEA_IN_Serial, "$PAIR062,4,1*3B");   // enable RMC
-    checkLOCOSYS_ACK(NMEA_IN_Serial);
-    send2Serial(NMEA_IN_Serial, "$PAIR513*3D");
-    checkLOCOSYS_ACK(NMEA_IN_Serial);
-    send2Serial(NMEA_IN_Serial, "$PAIR002*38");
-    checkLOCOSYS_ACK(NMEA_IN_Serial);
-    delay(1000);
-    for (int i=0;i<5;i++){
-      send2Serial(NMEA_IN_Serial, "$PAIR003*39");
-      if (checkLOCOSYS_ACK(NMEA_IN_Serial)) { break; }
-    }  
-
-    send2Serial(NMEA_IN_Serial, "$PAIR062,0,1*3F");   // enable GGA
-    checkLOCOSYS_ACK(NMEA_IN_Serial);
-    send2Serial(NMEA_IN_Serial, "$PAIR513*3D");
-    checkLOCOSYS_ACK(NMEA_IN_Serial);
-    send2Serial(NMEA_IN_Serial, "$PAIR002*38");
-    checkLOCOSYS_ACK(NMEA_IN_Serial);
-    delay(1000);
-    for (int i=0;i<5;i++){
-      send2Serial(NMEA_IN_Serial, "$PAIR003*39");
-      if (checkLOCOSYS_ACK(NMEA_IN_Serial)) { break; }
-    }  
-
-    send2Serial(NMEA_IN_Serial, "$PAIR062,8,1*37");   // enable GST
-    checkLOCOSYS_ACK(NMEA_IN_Serial);
-    send2Serial(NMEA_IN_Serial, "$PAIR513*3D");
-    checkLOCOSYS_ACK(NMEA_IN_Serial);
-    send2Serial(NMEA_IN_Serial, "$PAIR002*38");
-    checkLOCOSYS_ACK(NMEA_IN_Serial);
-    delay(1000);
-    for (int i=0;i<5;i++){
-      send2Serial(NMEA_IN_Serial, "$PAIR003*39");
-      if (checkLOCOSYS_ACK(NMEA_IN_Serial)) { break; }
-    }  
-
+    
+    // 禁用不需要的句子類型
     send2Serial(NMEA_IN_Serial, "$PAIR062,3,0*3D");   // disable GSV
     checkLOCOSYS_ACK(NMEA_IN_Serial);
-    send2Serial(NMEA_IN_Serial, "$PAIR513*3D");
-    checkLOCOSYS_ACK(NMEA_IN_Serial);
-    send2Serial(NMEA_IN_Serial, "$PAIR002*38");
-    checkLOCOSYS_ACK(NMEA_IN_Serial);
-    delay(1000);
-    for (int i=0;i<5;i++){
-      send2Serial(NMEA_IN_Serial, "$PAIR003*39");
-      if (checkLOCOSYS_ACK(NMEA_IN_Serial)) { break; }
-    }  
-
     send2Serial(NMEA_IN_Serial, "$PAIR062,5,0*3B");   // disable VTG
     checkLOCOSYS_ACK(NMEA_IN_Serial);
-    send2Serial(NMEA_IN_Serial, "$PAIR513*3D");
+    send2Serial(NMEA_IN_Serial, "$PAIR062,6,0*38");   // disable ZDA
     checkLOCOSYS_ACK(NMEA_IN_Serial);
-    send2Serial(NMEA_IN_Serial, "$PAIR002*38");
+    
+    // 最終保存設定
+    send2Serial(NMEA_IN_Serial, "$PAIR513*3D");       // save final settings
     checkLOCOSYS_ACK(NMEA_IN_Serial);
-    delay(1000);
+    send2Serial(NMEA_IN_Serial, "$PAIR002*38");       // final restart
+    checkLOCOSYS_ACK(NMEA_IN_Serial);
+    delay(2000);  // 等待重啟完成
   }
   
+  // 快速測試 LOCOSYS 4Hz 設定 (不需要設定模式)
+  else if (command == "TEST_4HZ") {
+    Serial.println("Testing LOCOSYS 4Hz configuration...");
+    
+    // 嘗試不同的參數值
+    Serial.println("Trying different frequency parameters...");
+    
+    // 參數 1: 嘗試使用 1 (可能代表最高頻率)
+    send2Serial(NMEA_IN_Serial, "$PAIR062,0,1*67");    // GGA higher freq
+    delay(200);
+    send2Serial(NMEA_IN_Serial, "$PAIR062,4,1*63");    // RMC higher freq
+    delay(200);
+    send2Serial(NMEA_IN_Serial, "$PAIR062,8,1*6F");    // GST higher freq
+    delay(200);
+    send2Serial(NMEA_IN_Serial, "$PAIR062,2,1*65");    // GSA higher freq
+    delay(200);
+    
+    Serial.println("Saving and restarting LOCOSYS...");
+    send2Serial(NMEA_IN_Serial, "$PAIR513*3D");        // save settings
+    delay(500);
+    send2Serial(NMEA_IN_Serial, "$PAIR002*38");        // restart
+    delay(2000);
+    
+    Serial.println("LOCOSYS restart complete. Monitor timestamps for changes.");
+    Serial.println("Expected: intervals should change from 500ms to 250ms or less");
+  }
+
   // 動態權重系統調試命令
   else if (command == "TRUST_STATUS") {
     send2Serial(PIXHAWK_SERIAL, "=== Dynamic Trust System Status ===");
@@ -2485,8 +2484,8 @@ void sendXSENSNMEAData(HardwareSerial &output_port) {
     if (heading_degrees < 0) heading_degrees += 360.0; // 確保正角度
   }
   
-  // 發送 HDT (每500ms發送一次 = 2Hz)
-  if (current_time - last_hdt_send >= 500) {
+  // 發送 HDT (每250ms發送一次 = 4Hz)
+  if (current_time - last_hdt_send >= 250) {
     String hdt_sentence = generateHDTSentence(heading_degrees);
     output_port.println(hdt_sentence);
     last_hdt_send = current_time;
@@ -2497,8 +2496,8 @@ void sendXSENSNMEAData(HardwareSerial &output_port) {
     }
   }
   
-  // 發送 PLSHD (每500ms發送一次 = 2Hz)
-  if (current_time - last_plshd_send >= 500) {
+  // 發送 PLSHD (每250ms發送一次 = 4Hz)
+  if (current_time - last_plshd_send >= 250) {
     float quality_factor = dynamic_trust.yaw_trust_factor * 9.0; // 轉換為0-9品質因子
     String plshd_sentence = generatePLSHDSentence(heading_degrees, quality_factor);
     output_port.println(plshd_sentence);
@@ -2510,8 +2509,8 @@ void sendXSENSNMEAData(HardwareSerial &output_port) {
     }
   }
   
-  // 發送 GSV (每500ms發送一次 = 2Hz)
-  if (current_time - last_gsv_send >= 500) {
+  // 發送 GSV (每250ms發送一次 = 4Hz)
+  if (current_time - last_gsv_send >= 250) {
     // 發送多星座 GSV 數據
     String gsv_sentence = generateGSVSentence(0, 1, 1, 12); // 假設12顆可見衛星
     output_port.println(gsv_sentence);

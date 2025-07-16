@@ -56,7 +56,7 @@ class XsensUart {
     void setAngleUnitDeg(bool unit);    
     void setAlignmentRotation(float q0, float q1, float q2, float q3);
     void setFrameENU(bool frame);
-    void setGnssReceiverSettings(int baudrate=115200, int update_rate=2, int talker_id=1);
+    void setGnssReceiverSettings(int baudrate=115200, int update_rate=4, int talker_id=1);
     void setStringOutputType(int odr);
     void setPortConfig(uint8_t output_type, int baudrate=115200);
     void setOutputNMEA() {setPortConfig(5);}
