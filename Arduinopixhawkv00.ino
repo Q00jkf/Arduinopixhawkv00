@@ -94,6 +94,9 @@ unsigned long last_gst_send = 0;            // 上次發送GST的時間
 unsigned long last_gsa_send = 0;            // 上次發送GSA的時間
 unsigned long last_vtg_send = 0;            // 上次發送VTG的時間
 unsigned long last_zda_send = 0;            // 上次發送ZDA的時間
+unsigned long last_hdt_send = 0;            // 上次發送HDT的時間
+unsigned long last_plshd_send = 0;          // 上次發送PLSHD的時間
+unsigned long last_gsv_send = 0;            // 上次發送GSV的時間
 // NMEA頻率控制已移除 - 直接轉發LOCOSYS輸出，不做頻率限制
 unsigned long nmea_received_count = 0;       // 接收到的NMEA句子總數
 unsigned long nmea_sent_count = 0;           // 發送到MTi-680的句子數
@@ -101,6 +104,11 @@ unsigned long nmea_invalid_count = 0;        // 無效NMEA句子數
 unsigned long nmea_discarded_count = 0;      // 被丟棄的不完整句子數
 unsigned long gga_sent = 0, rmc_sent = 0, gst_sent = 0; // 各類型句子發送統計
 unsigned long gsa_sent = 0, vtg_sent = 0, zda_sent = 0; // 新增句子類型發送統計
+unsigned long hdt_sent = 0, plshd_sent = 0, gsv_sent = 0; // XSENS專用句子發送統計
+
+// XSENS 全域數據變數
+my_data_3f latest_orientation = {0, 0, 0}; // 最新的方向數據 [pitch, roll, yaw]
+bool orientation_data_available = false;   // 方向數據是否可用
 
 // NMEA 數據組同步機制 - 基於XSENS官方要求的完整數據組
 struct NMEADataset {
@@ -280,6 +288,9 @@ void loop() {
                    ", GSA: " + String(gsa_sent) +
                    ", VTG: " + String(vtg_sent) +
                    ", ZDA: " + String(zda_sent));
+    Serial.println("[XSENS] HDT: " + String(hdt_sent) + 
+                   ", PLSHD: " + String(plshd_sent) + 
+                   ", GSV: " + String(gsv_sent));
     unsigned long now = millis();
     Serial.println("[TIMING] GGA: " + String((now - last_gga_send)/1000.0, 1) + "s ago" +
                    ", RMC: " + String((now - last_rmc_send)/1000.0, 1) + "s ago" +
@@ -330,6 +341,11 @@ void loop() {
     
     ISR_flag_NMEA = false;
     
+  }
+
+  // 發送 XSENS 專用 NMEA 數據 (HDT, PLSHD, GSV)
+  if (is_run && (current_output_mode == OUT_MODE_BIN || current_output_mode == OUT_MODE_GNSS)) {
+    sendXSENSNMEAData(NMEA_OUT_Serial);
   }
 
   // 除錯：監控串列埠狀態
@@ -468,6 +484,12 @@ void readXsens(){
       xsens.parseData(&xsens_counter, &XsensTime, &omg, &acc, &mag, &pressure, &vel, &latlon, &hei, &ori, &qut, &status, &temp);
       
       if (xsens.getDataStatus() == DATA_OK) {
+        // 更新全域 orientation 數據
+        latest_orientation.float_val[0] = ori.float_val[0]; // pitch
+        latest_orientation.float_val[1] = ori.float_val[1]; // roll
+        latest_orientation.float_val[2] = ori.float_val[2]; // yaw
+        orientation_data_available = true;
+        
         // Validate sensor data before processing
         bool data_valid = true;
         
@@ -1572,13 +1594,20 @@ void sendSynchronizedDataset(HardwareSerial &output_port) {
 void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool is_gnss_test) {
   nmea_received_count++; // 統計接收到的句子數
   
-  // MTi-680 只需要特定的NMEA句子類型
+  // MTi-680 只需要特定的NMEA句子類型 (包含XSENS新增需求)
   bool is_needed_sentence = nmea_sentence.startsWith("$GNGGA") || 
                            nmea_sentence.startsWith("$GNRMC") || 
                            nmea_sentence.startsWith("$GNGST") ||
                            nmea_sentence.startsWith("$GNGSA") ||
                            nmea_sentence.startsWith("$GNVTG") ||
-                           nmea_sentence.startsWith("$GNZDA");
+                           nmea_sentence.startsWith("$GNZDA") ||
+                           nmea_sentence.startsWith("$GNHDT") ||
+                           nmea_sentence.startsWith("$PLSHD") ||
+                           nmea_sentence.startsWith("$GPGSV") ||
+                           nmea_sentence.startsWith("$GLGSV") ||
+                           nmea_sentence.startsWith("$GAGSV") ||
+                           nmea_sentence.startsWith("$GBGSV") ||
+                           nmea_sentence.startsWith("$GNGSV");
   
   // 如果不是需要的句子類型，直接丟棄
   if (!is_needed_sentence) {
@@ -1627,6 +1656,17 @@ void processNMEASentence(String nmea_sentence, HardwareSerial &output_port, bool
     } else if (nmea_sentence.startsWith("$GNZDA")) {
       last_zda_send = current_time;
       zda_sent++;
+    } else if (nmea_sentence.startsWith("$GNHDT")) {
+      last_hdt_send = current_time;
+      hdt_sent++;
+    } else if (nmea_sentence.startsWith("$PLSHD")) {
+      last_plshd_send = current_time;
+      plshd_sent++;
+    } else if (nmea_sentence.startsWith("$GPGSV") || nmea_sentence.startsWith("$GLGSV") || 
+               nmea_sentence.startsWith("$GAGSV") || nmea_sentence.startsWith("$GBGSV") || 
+               nmea_sentence.startsWith("$GNGSV")) {
+      last_gsv_send = current_time;
+      gsv_sent++;
     }
     
     if (is_debug) {
@@ -2376,5 +2416,111 @@ String normalizeNMEASentence(const String& nmea_sentence) {
   }
   
   return result;
+}
+
+// ==================== XSENS 專用 NMEA 數據生成函數 ====================
+
+// 生成 HDT (Heading, True) 句子
+String generateHDTSentence(float heading_degrees) {
+  String hdt_sentence = "$GNHDT,";
+  hdt_sentence += String(heading_degrees, 2);
+  hdt_sentence += ",T";
+  
+  // 計算 checksum
+  String checksum = cal_xor_checksum(hdt_sentence.substring(1)); // 跳過 '$'
+  hdt_sentence += "*" + checksum;
+  
+  return hdt_sentence;
+}
+
+// 生成 PLSHD (Proprietary dual-antenna GNSS heading) 句子
+String generatePLSHDSentence(float heading_degrees, float quality_factor) {
+  String plshd_sentence = "$PLSHD,";
+  plshd_sentence += String(heading_degrees, 2);
+  plshd_sentence += ",T,";
+  plshd_sentence += String(quality_factor, 1);
+  
+  // 計算 checksum
+  String checksum = cal_xor_checksum(plshd_sentence.substring(1)); // 跳過 '$'
+  plshd_sentence += "*" + checksum;
+  
+  return plshd_sentence;
+}
+
+// 生成 GSV (GNSS Satellites in View) 句子
+String generateGSVSentence(int constellation_id, int total_messages, int message_number, int satellites_in_view) {
+  String constellation = "GN"; // 默認多星座
+  if (constellation_id == 1) constellation = "GP"; // GPS
+  else if (constellation_id == 2) constellation = "GL"; // GLONASS
+  else if (constellation_id == 3) constellation = "GA"; // Galileo
+  else if (constellation_id == 4) constellation = "GB"; // BeiDou
+  
+  String gsv_sentence = "$" + constellation + "GSV,";
+  gsv_sentence += String(total_messages);
+  gsv_sentence += ",";
+  gsv_sentence += String(message_number);
+  gsv_sentence += ",";
+  gsv_sentence += String(satellites_in_view);
+  
+  // 這裡可以添加具體的衛星信息，暫時使用基本格式
+  for (int i = 0; i < 4; i++) { // 每個GSV句子最多4顆衛星
+    gsv_sentence += ",,,"; // PRN, elevation, azimuth, SNR (空白表示無數據)
+  }
+  
+  // 計算 checksum
+  String checksum = cal_xor_checksum(gsv_sentence.substring(1)); // 跳過 '$'
+  gsv_sentence += "*" + checksum;
+  
+  return gsv_sentence;
+}
+
+// 發送 XSENS 專用 NMEA 數據到輸出端口
+void sendXSENSNMEAData(HardwareSerial &output_port) {
+  unsigned long current_time = millis();
+  
+  // 從全域變數獲取航向角度 (弧度轉度數)
+  float heading_degrees = 0.0;
+  if (orientation_data_available) {
+    heading_degrees = latest_orientation.float_val[2] * 180.0 / M_PI; // YAW軸，弧度轉度數
+    if (heading_degrees < 0) heading_degrees += 360.0; // 確保正角度
+  }
+  
+  // 發送 HDT (每500ms發送一次 = 2Hz)
+  if (current_time - last_hdt_send >= 500) {
+    String hdt_sentence = generateHDTSentence(heading_degrees);
+    output_port.println(hdt_sentence);
+    last_hdt_send = current_time;
+    hdt_sent++;
+    
+    if (is_debug) {
+      Serial.println("→ XSENS HDT: " + hdt_sentence);
+    }
+  }
+  
+  // 發送 PLSHD (每500ms發送一次 = 2Hz)
+  if (current_time - last_plshd_send >= 500) {
+    float quality_factor = dynamic_trust.yaw_trust_factor * 9.0; // 轉換為0-9品質因子
+    String plshd_sentence = generatePLSHDSentence(heading_degrees, quality_factor);
+    output_port.println(plshd_sentence);
+    last_plshd_send = current_time;
+    plshd_sent++;
+    
+    if (is_debug) {
+      Serial.println("→ XSENS PLSHD: " + plshd_sentence);
+    }
+  }
+  
+  // 發送 GSV (每500ms發送一次 = 2Hz)
+  if (current_time - last_gsv_send >= 500) {
+    // 發送多星座 GSV 數據
+    String gsv_sentence = generateGSVSentence(0, 1, 1, 12); // 假設12顆可見衛星
+    output_port.println(gsv_sentence);
+    last_gsv_send = current_time;
+    gsv_sent++;
+    
+    if (is_debug) {
+      Serial.println("→ XSENS GSV: " + gsv_sentence);
+    }
+  }
 }
 
