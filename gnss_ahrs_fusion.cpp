@@ -136,6 +136,31 @@ void GNSSAHRSFusion::updateGNSSData(const String& nmea_sentence) {
 // 更新 MTDATA2 資料
 void GNSSAHRSFusion::updateMTData2(const my_data_4f& quat, const my_data_3f& omg, 
                                    const my_data_3f& acc, const my_data_3f& ori, uint32_t timestamp) {
+    // 檢查四元數有效性
+    bool quat_valid = true;
+    for (int i = 0; i < 4; i++) {
+        if (isnan(quat.float_val[i]) || isinf(quat.float_val[i])) {
+            quat_valid = false;
+            break;
+        }
+    }
+    
+    if (!quat_valid) {
+        debugPrint("[FUSION] MTDATA2 Invalid quaternion - skipping update");
+        return;
+    }
+    
+    // 計算四元數模長
+    float quat_norm = sqrt(quat.float_val[0]*quat.float_val[0] + 
+                          quat.float_val[1]*quat.float_val[1] + 
+                          quat.float_val[2]*quat.float_val[2] + 
+                          quat.float_val[3]*quat.float_val[3]);
+    
+    if (quat_norm < 0.1f) {
+        debugPrint("[FUSION] MTDATA2 Quaternion norm too small: " + String(quat_norm, 3));
+        return;
+    }
+    
     // 複製四元數
     for (int i = 0; i < 4; i++) {
         mtdata2_data.quaternion[i] = quat.float_val[i];
@@ -152,10 +177,16 @@ void GNSSAHRSFusion::updateMTData2(const my_data_4f& quat, const my_data_3f& omg
     mtdata2_data.valid = true;
     status.last_mtdata2_update = millis();
     
-    debugPrint("[FUSION] MTDATA2 Updated: Q0=" + String(mtdata2_data.quaternion[0], 3) + 
-              " Q1=" + String(mtdata2_data.quaternion[1], 3) + 
-              " Q2=" + String(mtdata2_data.quaternion[2], 3) + 
-              " Q3=" + String(mtdata2_data.quaternion[3], 3));
+    // 降低除錯輸出頻率
+    static unsigned long last_debug_output = 0;
+    if (millis() - last_debug_output > 500) { // 每 500ms 輸出一次
+        debugPrint("[FUSION] MTDATA2 Updated: Q0=" + String(mtdata2_data.quaternion[0], 3) + 
+                  " Q1=" + String(mtdata2_data.quaternion[1], 3) + 
+                  " Q2=" + String(mtdata2_data.quaternion[2], 3) + 
+                  " Q3=" + String(mtdata2_data.quaternion[3], 3) + 
+                  " Norm=" + String(quat_norm, 3));
+        last_debug_output = millis();
+    }
     
     updateFusionStatus();
 }
@@ -172,9 +203,12 @@ void GNSSAHRSFusion::updateFusionStatus() {
     status.fusion_active = status.gnss_valid && status.mtdata2_valid;
     status.gnss_quality = gnss_data.quality;
     
-    if (status.fusion_active) {
+    // 降低狀態輸出頻率
+    static unsigned long last_status_output = 0;
+    if (status.fusion_active && millis() - last_status_output > 1000) { // 每 1 秒輸出一次
         debugPrint("[FUSION] Status: ACTIVE - GNSS:" + String(status.gnss_valid ? "OK" : "FAIL") + 
                   " MTDATA2:" + String(status.mtdata2_valid ? "OK" : "FAIL"));
+        last_status_output = millis();
     }
 }
 
@@ -186,12 +220,23 @@ bool GNSSAHRSFusion::isDataReady() {
 // 處理融合
 bool GNSSAHRSFusion::processFusion() {
     if (!isDataReady()) {
-        debugPrint("[FUSION] Data not ready for fusion");
+        static unsigned long last_error_output = 0;
+        if (millis() - last_error_output > 1000) {
+            debugPrint("[FUSION] Data not ready - GNSS:" + String(status.gnss_valid ? "OK" : "FAIL") + 
+                      " MTDATA2:" + String(status.mtdata2_valid ? "OK" : "FAIL"));
+            last_error_output = millis();
+        }
         return false;
     }
     
     status.fusion_count++;
-    debugPrint("[FUSION] Processing fusion #" + String(status.fusion_count));
+    
+    // 降低處理輸出頻率
+    static unsigned long last_process_output = 0;
+    if (millis() - last_process_output > 1000) {
+        debugPrint("[FUSION] Processing fusion #" + String(status.fusion_count));
+        last_process_output = millis();
+    }
     
     return true;
 }
@@ -266,14 +311,19 @@ bool GNSSAHRSFusion::sendMAVLinkOdometry(HardwareSerial& serial_port) {
     status.mavlink_send_count++;
     status.last_fusion_send = millis();
     
-    debugPrint("[FUSION] MAVLink ODO sent #" + String(status.mavlink_send_count) + 
-              " Length:" + String(len) + " bytes");
-    debugPrint("[FUSION] Position: X=" + String(odom.x, 6) + 
-              " Y=" + String(odom.y, 6) + 
-              " Z=" + String(odom.z, 2));
-    debugPrint("[FUSION] Velocity: VX=" + String(odom.vx, 3) + 
-              " VY=" + String(odom.vy, 3) + 
-              " VZ=" + String(odom.vz, 3));
+    // 降低 MAVLink 輸出頻率
+    static unsigned long last_mavlink_output = 0;
+    if (millis() - last_mavlink_output > 1000) {
+        debugPrint("[FUSION] MAVLink ODO sent #" + String(status.mavlink_send_count) + 
+                  " Length:" + String(len) + " bytes");
+        debugPrint("[FUSION] Position: X=" + String(odom.x, 6) + 
+                  " Y=" + String(odom.y, 6) + 
+                  " Z=" + String(odom.z, 2));
+        debugPrint("[FUSION] Velocity: VX=" + String(odom.vx, 3) + 
+                  " VY=" + String(odom.vy, 3) + 
+                  " VZ=" + String(odom.vz, 3));
+        last_mavlink_output = millis();
+    }
     
     return true;
 }
