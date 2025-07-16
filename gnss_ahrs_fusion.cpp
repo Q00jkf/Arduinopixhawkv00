@@ -85,10 +85,14 @@ void GNSSAHRSFusion::updateGNSSData(const String& nmea_sentence) {
                 gnss_data.timestamp = millis();
                 status.last_gnss_update = millis();
                 
-                debugPrint("[FUSION] GNSS Updated: Lat=" + String(gnss_data.latitude, 6) + 
+                debugPrint("[FUSION] GNSS GGA Updated: Lat=" + String(gnss_data.latitude, 6) + 
                           " Lon=" + String(gnss_data.longitude, 6) + 
                           " Alt=" + String(gnss_data.altitude, 1) + 
-                          " Q=" + String(gnss_data.quality));
+                          " Q=" + String(gnss_data.quality) + 
+                          " Valid=" + String(gnss_data.valid ? "YES" : "NO"));
+            } else {
+                debugPrint("[FUSION] GNSS GGA: Invalid lat/lon data - Lat len=" + String(lat_str.length()) + 
+                          " Lon len=" + String(lon_str.length()));
             }
         }
     }
@@ -122,10 +126,13 @@ void GNSSAHRSFusion::updateGNSSData(const String& nmea_sentence) {
                 gnss_data.velocity_east = gnss_data.speed * sin(course_rad);
                 gnss_data.velocity_down = 0.0;
                 
-                debugPrint("[FUSION] GNSS Velocity: Speed=" + String(gnss_data.speed, 3) + 
+                debugPrint("[FUSION] GNSS RMC Updated: Speed=" + String(gnss_data.speed, 3) + 
                           " Course=" + String(gnss_data.course, 1) + 
                           " VN=" + String(gnss_data.velocity_north, 3) + 
                           " VE=" + String(gnss_data.velocity_east, 3));
+            } else {
+                debugPrint("[FUSION] GNSS RMC: Invalid speed/course data - Speed len=" + String(speed_str.length()) + 
+                          " Course len=" + String(course_str.length()));
             }
         }
     }
@@ -247,20 +254,46 @@ bool GNSSAHRSFusion::sendMAVLinkOdometry(HardwareSerial& serial_port) {
         return false;
     }
     
+    // 除錯：檢查融合資料來源
+    static unsigned long last_data_check = 0;
+    if (millis() - last_data_check > 2000) {
+        debugPrint("[FUSION] Data Source Check:");
+        debugPrint("  GNSS Lat: " + String(gnss_data.latitude, 6) + 
+                  " Lon: " + String(gnss_data.longitude, 6) + 
+                  " Alt: " + String(gnss_data.altitude, 2));
+        debugPrint("  GNSS Vel: N=" + String(gnss_data.velocity_north, 3) + 
+                  " E=" + String(gnss_data.velocity_east, 3) + 
+                  " D=" + String(gnss_data.velocity_down, 3));
+        debugPrint("  GNSS Valid: " + String(gnss_data.valid ? "YES" : "NO") + 
+                  " Quality: " + String(gnss_data.quality));
+        debugPrint("  MTDATA2 Q: [" + String(mtdata2_data.quaternion[0], 3) + 
+                  "," + String(mtdata2_data.quaternion[1], 3) + 
+                  "," + String(mtdata2_data.quaternion[2], 3) + 
+                  "," + String(mtdata2_data.quaternion[3], 3) + "]");
+        last_data_check = millis();
+    }
+    
     // 創建 MAVLink odometry 封包
     mavlink_odometry_t odom = {};
     
     // 時間戳
     odom.time_usec = (uint64_t)mtdata2_data.timestamp * 100UL;
     
-    // 座標系設定
+    // 座標系設定 - 使用 GLOBAL 座標系以便 Pixhawk 理解
     odom.frame_id = MAV_FRAME_GLOBAL;
     odom.child_frame_id = MAV_FRAME_LOCAL_NED;
     
-    // 位置 (從 GNSS)
-    odom.x = gnss_data.latitude;
-    odom.y = gnss_data.longitude;
-    odom.z = -gnss_data.altitude; // NED 座標系
+    // 位置 (從 GNSS) - 確保資料有效
+    if (gnss_data.valid && gnss_data.latitude != 0.0 && gnss_data.longitude != 0.0) {
+        odom.x = gnss_data.latitude;
+        odom.y = gnss_data.longitude;
+        odom.z = -gnss_data.altitude; // NED 座標系 (負值表示海拔)
+    } else {
+        debugPrint("[FUSION] WARNING: Invalid GNSS position data");
+        odom.x = 0.0;
+        odom.y = 0.0;
+        odom.z = 0.0;
+    }
     
     // 速度 (從 GNSS)
     odom.vx = gnss_data.velocity_north;
@@ -314,14 +347,26 @@ bool GNSSAHRSFusion::sendMAVLinkOdometry(HardwareSerial& serial_port) {
     // 降低 MAVLink 輸出頻率
     static unsigned long last_mavlink_output = 0;
     if (millis() - last_mavlink_output > 1000) {
-        debugPrint("[FUSION] MAVLink ODO sent #" + String(status.mavlink_send_count) + 
+        debugPrint("[FUSION] =============== MAVLink ODO Packet ===============");
+        debugPrint("[FUSION] Packet #" + String(status.mavlink_send_count) + 
                   " Length:" + String(len) + " bytes");
-        debugPrint("[FUSION] Position: X=" + String(odom.x, 6) + 
+        debugPrint("[FUSION] Frame: " + String(odom.frame_id) + 
+                  " Child: " + String(odom.child_frame_id));
+        debugPrint("[FUSION] Position (GNSS): X=" + String(odom.x, 6) + 
                   " Y=" + String(odom.y, 6) + 
                   " Z=" + String(odom.z, 2));
-        debugPrint("[FUSION] Velocity: VX=" + String(odom.vx, 3) + 
+        debugPrint("[FUSION] Velocity (GNSS): VX=" + String(odom.vx, 3) + 
                   " VY=" + String(odom.vy, 3) + 
                   " VZ=" + String(odom.vz, 3));
+        debugPrint("[FUSION] Quaternion (XSENS): Q0=" + String(odom.q[0], 3) + 
+                  " Q1=" + String(odom.q[1], 3) + 
+                  " Q2=" + String(odom.q[2], 3) + 
+                  " Q3=" + String(odom.q[3], 3));
+        debugPrint("[FUSION] Angular Vel (XSENS): RX=" + String(odom.rollspeed, 3) + 
+                  " RY=" + String(odom.pitchspeed, 3) + 
+                  " RZ=" + String(odom.yawspeed, 3));
+        debugPrint("[FUSION] Estimator Type: " + String(odom.estimator_type));
+        debugPrint("[FUSION] ================================================");
         last_mavlink_output = millis();
     }
     
