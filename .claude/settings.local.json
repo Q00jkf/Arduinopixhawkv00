@@ -1,0 +1,36 @@
+{
+  "user": {
+    "name": "guanyou",
+    "role": "lead_developer",
+    "preferences": {
+      "language": "Chinese/English",
+      "timezone": "Asia/Taipei",
+      "work_hours": "09:00-18:00"
+    }
+  },
+  "local_config": {
+    "debug_mode": true,
+    "verbose_output": true,
+    "auto_backup": true,
+    "session_timeout": 3600
+  },
+  "development": {
+    "current_branch": "main",
+    "active_features": [
+      "時序同步解決方案",
+      "NMEA解析器優化",
+      "硬體整合測試"
+    ],
+    "priority_tasks": [
+      "實施XSENS時序同步緩衝區機制",
+      "測試4Hz GNSS數據流穩定性",
+      "驗證MTi-680數據接收問題解決"
+    ]
+  },
+  "tools": {
+    "preferred_editor": "Arduino IDE",
+    "version_control": "git",
+    "debugging": "Serial Monitor",
+    "testing": "Hardware-in-Loop"
+  }
+}

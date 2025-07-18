@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include <MAVLink.h>
-#include "myMessage.h"
+#include "../communication/myMessage.h"
 
 // 融合模組狀態
 struct FusionStatus {

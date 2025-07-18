@@ -12,7 +12,7 @@ SERCOM4: SPI     (PB10, PB11, PA12, PA13) [ss, miso, mosi, sck]
 SERCOM5: serial1 (PB23, PB22) [rx, tx]
   
 ***/
-#include "uartRT.h"
+#include "../communication/uartRT.h"
 #include "wiring_private.h"
 
 const uint8_t output_header[4] = {0xFE, 0x81, 0xFF, 0x55};

@@ -4,7 +4,7 @@
 #include <vector>
 #include <sstream>
 #include "myMessage.h"
-#include "Xsens/XsensMessage.h"
+#include "../external/Xsens/XsensMessage.h"
 
 #define LEN_XBUS 200
 

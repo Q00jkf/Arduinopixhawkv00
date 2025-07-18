@@ -1,0 +1,97 @@
+{
+  "project": {
+    "name": "MINSPixhawk",
+    "version": "1.0.0",
+    "description": "Integrated framework for Xsens MTi-680 sensor and Pixhawk (PX4) flight control system",
+    "author": "guanyou",
+    "created": "2025-07-18"
+  },
+  "memory": {
+    "enabled": true,
+    "project_context": [
+      "Arduino嵌入式開發規範",
+      "XSENS MTi-680整合標準", 
+      "MAVLink協定實作指南",
+      "NMEA 0183解析規範",
+      "PX4飛控系統整合"
+    ],
+    "shared_knowledge": [
+      "C++/Arduino程式設計模式",
+      "即時系統設計原則",
+      "感測器融合演算法",
+      "通訊協定整合方法"
+    ]
+  },
+  "commands": {
+    "enabled": true,
+    "custom_commands": [
+      {
+        "name": "xsens",
+        "description": "載入XSENS MTi-680開發環境",
+        "file": ".claude/commands/xsens.md"
+      },
+      {
+        "name": "mavlink", 
+        "description": "載入MAVLink協定開發環境",
+        "file": ".claude/commands/mavlink.md"
+      },
+      {
+        "name": "debug-nmea",
+        "description": "載入NMEA調試工具環境", 
+        "file": ".claude/commands/debug-nmea.md"
+      },
+      {
+        "name": "hardware",
+        "description": "載入硬體整合開發環境",
+        "file": ".claude/commands/hardware.md"
+      }
+    ]
+  },
+  "permissions": {
+    "code_review": "team",
+    "hardware_config": "lead_only",
+    "deployment": "lead_only",
+    "documentation": "team"
+  },
+  "workflow": {
+    "shortcuts": {
+      "quick_files": {
+        "@Arduinopixhawkv00": "Arduinopixhawkv00.ino",
+        "@main": "Arduinopixhawkv00.ino",
+        "@xsens": "src/communication/myUARTSensor.cpp",
+        "@fusion": "src/core/gnss_ahrs_fusion.h",
+        "@orientation": "src/core/Orientation.h",
+        "@uart": "src/utils/myUART.h",
+        "@config": "CLAUDE.md",
+        "@log": "WORK_LOG.md",
+        "@readme": "README.md",
+        "@commands": "docs/COMMANDS_REFERENCE.md"
+      },
+      "memory_points": {
+        "#xsens-debug": "XSENS感測器調試狀態",
+        "#mavlink-config": "MAVLink協定配置狀態",
+        "#nmea-parser": "NMEA解析器開發狀態",
+        "#time-sync": "時序同步機制開發狀態",
+        "#milestone-alpha": "Alpha版本開發完成"
+      }
+    }
+  },
+  "coding_standards": {
+    "language": "C++/Arduino",
+    "style": {
+      "indentation": "4 spaces",
+      "naming": {
+        "variables": "snake_case",
+        "functions": "camelCase", 
+        "classes": "PascalCase",
+        "constants": "UPPER_CASE"
+      },
+      "comments": "中英混合註解",
+      "brackets": "Allman style"
+    }
+  },
+  "mcp_servers": {
+    "enabled": false,
+    "servers": []
+  }
+}

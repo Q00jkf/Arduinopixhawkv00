@@ -1,9 +1,9 @@
 #include <MAVLink.h>
 #include <Arduino.h>
-#include "myUARTSensor.h"
-#include "myUART.h"
-#include "Orientation.h"
-#include "gnss_ahrs_fusion.h"
+#include "src/communication/myUARTSensor.h"
+#include "src/utils/myUART.h"
+#include "src/core/Orientation.h"
+#include "src/core/gnss_ahrs_fusion.h"
 
 // Function declarations
 void performSecurityCheck(HardwareSerial &port, bool silent_mode);
